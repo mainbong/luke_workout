@@ -210,23 +210,31 @@ function buildRoutines(
           ],
         },
         {
-          name: "케이블 로우",
+          name: "시티드 케이블 로우",
           prescription: "15회 × 5세트",
           note: "15회를 당겨 RPE 8인 시작 무게를 정합니다. 매 세트 한 칸씩 증량하며 15회를 채우고, 실패하면 증량을 멈춘 뒤 남은 세트는 같은 무게로 가능한 최대 횟수까지 진행합니다.",
           guides: [
             {
-              label: "시티드 케이블 로우 전체 가이드",
-              url: "https://www.youtube.com/watch?v=CsROhQ1onAg",
+              label: "한국어 쇼츠 · 1분 자세",
+              url: "https://www.youtube.com/shorts/YeQDG8uUE3M",
+            },
+            {
+              label: "한국어 상세 가이드 · 2분대",
+              url: "https://www.youtube.com/watch?v=guLhRDd8VTA",
             },
           ],
         },
         {
-          name: "케이블 스트레이트 암 풀다운",
+          name: "스트레이트 암 풀다운",
           prescription: "15회 × 5세트",
           note: "첫 15회가 RPE 8인 무게를 찾고 같은 무게로 5세트를 진행합니다. 15회에 실패하면 자세를 유지할 수 있도록 계속 감량하면서 15회를 채웁니다.",
           guides: [
             {
-              label: "스트레이트 암 풀다운 셋업·자세",
+              label: "한국어 쇼츠 · 자극 잡기",
+              url: "https://www.youtube.com/shorts/0sUwxJgXBdQ",
+            },
+            {
+              label: "상세 셋업·자세",
               url: "https://www.youtube.com/watch?v=98W63pVdW38",
             },
           ],
