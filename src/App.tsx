@@ -1,12 +1,17 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowUpRight, Check, ChevronRight, Dumbbell, Play } from "lucide-react";
+import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
+import { ArrowUpRight, Check, Dumbbell, LogIn, LogOut, Play, Save } from "lucide-react";
+import { isSupabaseConfigured, supabase, type WorkoutSession } from "./supabase";
 
 const START_DATE = new Date("2026-07-23T00:00:00+09:00");
+const END_DATE = "2026-10-20";
 const TOTAL_DAYS = 90;
-
-const CURRENT_TARGETS = {
-  pushTotal: 100,
-  pullTotal: 30,
+const PUSH_START_TARGET = 100;
+const PULL_TARGET = 30;
+const FIRST_PUSH_RECORD = {
+  workout_date: "2026-07-23",
+  target_total: 100,
+  total_reps: 83,
 };
 
 type Exercise = {
@@ -30,88 +35,6 @@ type Routine = {
   link?: { label: string; url: string };
 };
 
-const routines: Routine[] = [
-  { id: "mon", day: "MON", ko: "월요일", status: "pending", short: "루틴 미정" },
-  { id: "tue", day: "TUE", ko: "화요일", status: "pending", short: "루틴 미정" },
-  { id: "wed", day: "WED", ko: "수요일", status: "pending", short: "루틴 미정" },
-  {
-    id: "thu",
-    day: "THU",
-    ko: "목요일",
-    status: "done",
-    short: `푸쉬업 ${CURRENT_TARGETS.pushTotal}`,
-    category: "WEIGHT PUSH",
-    title: "푸쉬업 맥스 미션",
-    summary: "근력 운동처럼 세트마다 1분 30초를 쉬며 최대 반복을 수행합니다.",
-    target: `현재 목표 · 5세트 합계 ${CURRENT_TARGETS.pushTotal}회`,
-    record: "7월 23일 첫 기록 · 5세트 합계 83회",
-    exercises: [
-      {
-        name: "푸쉬업",
-        prescription: "최대 5세트",
-        note: "각 세트 실패 직전까지. 자세가 무너지면 해당 세트 종료.",
-      },
-      {
-        name: "세트 간 휴식",
-        prescription: "1분 30초",
-      },
-    ],
-  },
-  {
-    id: "fri",
-    day: "FRI",
-    ko: "금요일",
-    status: "ready",
-    short: "푸쉬업 기술",
-    category: "PUSH SKILL",
-    title: "푸쉬업 기술 루틴",
-    summary: "영상의 다양한 푸쉬업 동작을 따라 하며 반복 수보다 기술을 익힙니다.",
-    target: "현재 목표 · 영상 루틴 20분 완주",
-    exercises: [
-      {
-        name: "영상 가이드 루틴",
-        prescription: "20분 · 1회",
-        note: "영상의 동작과 순서를 그대로 따라 하기.",
-      },
-      {
-        name: "동작 간 휴식",
-        prescription: "15초",
-      },
-    ],
-    link: {
-      label: "초보자가 꼭 해야 할 푸쉬업 20분 루틴",
-      url: "https://www.youtube.com/watch?v=Di-lTiYsQeE",
-    },
-  },
-  {
-    id: "sat",
-    day: "SAT",
-    ko: "토요일",
-    status: "ready",
-    short: `풀업 ${CURRENT_TARGETS.pullTotal}`,
-    category: "WEIGHT PULL",
-    title: "풀업 미션 + 러닝머신",
-    summary: "풀업을 웨이트 세트처럼 수행한 뒤 러닝머신을 진행합니다.",
-    target: `현재 목표 · 풀업 총 ${CURRENT_TARGETS.pullTotal}회`,
-    exercises: [
-      {
-        name: "풀업 미션",
-        prescription: `총 ${CURRENT_TARGETS.pullTotal}회 · 최대 10세트`,
-        note: "보조 중량 조건 없음.",
-      },
-      {
-        name: "세트 간 휴식",
-        prescription: "1분 30초",
-      },
-      {
-        name: "러닝머신",
-        prescription: "풀업 미션 후 진행",
-      },
-    ],
-  },
-  { id: "sun", day: "SUN", ko: "일요일", status: "pending", short: "루틴 미정" },
-];
-
 function getSeoulToday() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
 }
@@ -128,19 +51,345 @@ function getTodayRoutineId(date: Date) {
   return ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][date.getDay()];
 }
 
+function toDateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getThisWeeksThursday(today: Date) {
+  const monday = getMonday(today);
+  const thursday = new Date(monday);
+  thursday.setDate(monday.getDate() + 3);
+  if (thursday < START_DATE) return FIRST_PUSH_RECORD.workout_date;
+  return toDateInputValue(thursday);
+}
+
+function formatWorkoutDate(value: string) {
+  const [, month, day] = value.split("-").map(Number);
+  return `${month}월 ${day}일`;
+}
+
+function nextPushTarget(records: WorkoutSession[]) {
+  if (records.length === 0) return PUSH_START_TARGET;
+  const latest = records[0];
+  return latest.total_reps >= latest.target_total
+    ? latest.target_total + 10
+    : latest.target_total;
+}
+
+function buildRoutines(pushTarget: number, latestRecord?: WorkoutSession): Routine[] {
+  const record = latestRecord ?? FIRST_PUSH_RECORD;
+
+  return [
+    { id: "mon", day: "MON", ko: "월요일", status: "pending", short: "루틴 미정" },
+    { id: "tue", day: "TUE", ko: "화요일", status: "pending", short: "루틴 미정" },
+    { id: "wed", day: "WED", ko: "수요일", status: "pending", short: "루틴 미정" },
+    {
+      id: "thu",
+      day: "THU",
+      ko: "목요일",
+      status: "done",
+      short: `푸쉬업 ${pushTarget}`,
+      category: "WEIGHT PUSH",
+      title: "푸쉬업 맥스 미션",
+      summary: "근력 운동처럼 세트마다 1분 30초를 쉬며 최대 반복을 수행합니다.",
+      target: `현재 목표 · 5세트 합계 ${pushTarget}회`,
+      record: `${formatWorkoutDate(record.workout_date)} 최근 기록 · ${record.total_reps} / ${record.target_total}회`,
+      exercises: [
+        {
+          name: "푸쉬업",
+          prescription: "최대 5세트",
+          note: "각 세트 실패 직전까지. 자세가 무너지면 해당 세트 종료.",
+        },
+        {
+          name: "세트 간 휴식",
+          prescription: "1분 30초",
+        },
+      ],
+    },
+    {
+      id: "fri",
+      day: "FRI",
+      ko: "금요일",
+      status: "ready",
+      short: "푸쉬업 기술",
+      category: "PUSH SKILL",
+      title: "푸쉬업 기술 루틴",
+      summary: "영상의 다양한 푸쉬업 동작을 따라 하며 반복 수보다 기술을 익힙니다.",
+      target: "현재 목표 · 영상 루틴 20분 완주",
+      exercises: [
+        {
+          name: "영상 가이드 루틴",
+          prescription: "20분 · 1회",
+          note: "영상의 동작과 순서를 그대로 따라 하기.",
+        },
+        {
+          name: "동작 간 휴식",
+          prescription: "15초",
+        },
+      ],
+      link: {
+        label: "초보자가 꼭 해야 할 푸쉬업 20분 루틴",
+        url: "https://www.youtube.com/watch?v=Di-lTiYsQeE",
+      },
+    },
+    {
+      id: "sat",
+      day: "SAT",
+      ko: "토요일",
+      status: "ready",
+      short: `풀업 ${PULL_TARGET}`,
+      category: "WEIGHT PULL",
+      title: "풀업 미션 + 러닝머신",
+      summary: "풀업을 웨이트 세트처럼 수행한 뒤 러닝머신을 진행합니다.",
+      target: `현재 목표 · 풀업 총 ${PULL_TARGET}회`,
+      exercises: [
+        {
+          name: "풀업 미션",
+          prescription: `총 ${PULL_TARGET}회 · 최대 10세트`,
+          note: "보조 중량 조건 없음.",
+        },
+        {
+          name: "세트 간 휴식",
+          prescription: "1분 30초",
+        },
+        {
+          name: "러닝머신",
+          prescription: "풀업 미션 후 진행",
+        },
+      ],
+    },
+    { id: "sun", day: "SUN", ko: "일요일", status: "pending", short: "루틴 미정" },
+  ];
+}
+
+function PushResultForm({
+  session,
+  records,
+  currentTarget,
+  defaultDate,
+  onSaved,
+}: {
+  session: Session | null;
+  records: WorkoutSession[];
+  currentTarget: number;
+  defaultDate: string;
+  onSaved: () => Promise<void>;
+}) {
+  const [email, setEmail] = useState("");
+  const [workoutDate, setWorkoutDate] = useState(defaultDate);
+  const [totalReps, setTotalReps] = useState(
+    defaultDate === FIRST_PUSH_RECORD.workout_date ? String(FIRST_PUSH_RECORD.total_reps) : "",
+  );
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const savedRecord = records.find((record) => record.workout_date === workoutDate);
+
+  useEffect(() => {
+    if (savedRecord) {
+      setTotalReps(String(savedRecord.total_reps));
+    } else if (workoutDate === FIRST_PUSH_RECORD.workout_date) {
+      setTotalReps(String(FIRST_PUSH_RECORD.total_reps));
+    } else {
+      setTotalReps("");
+    }
+  }, [savedRecord, workoutDate]);
+
+  async function sendMagicLink(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase) return;
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.href.split("#")[0] },
+    });
+    setBusy(false);
+    setMessage(error ? error.message : "로그인 링크를 이메일로 보냈습니다. 같은 브라우저에서 열어주세요.");
+  }
+
+  async function saveResult(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !session) return;
+    const reps = Number(totalReps);
+    if (!Number.isInteger(reps) || reps < 0) {
+      setMessage("합계는 0 이상의 정수로 입력해주세요.");
+      return;
+    }
+
+    const existing = records.find((record) => record.workout_date === workoutDate);
+    const target = existing?.target_total
+      ?? (workoutDate === FIRST_PUSH_RECORD.workout_date ? FIRST_PUSH_RECORD.target_total : currentTarget);
+
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase.from("workout_sessions").upsert(
+      {
+        user_id: session.user.id,
+        workout_date: workoutDate,
+        workout_type: "pushup",
+        target_total: target,
+        total_reps: reps,
+      },
+      { onConflict: "user_id,workout_date,workout_type" },
+    );
+
+    if (error) {
+      setMessage(`저장하지 못했습니다: ${error.message}`);
+    } else {
+      await onSaved();
+      const followingTarget = reps >= target ? target + 10 : target;
+      setMessage(`저장 완료 · 다음 목표 ${followingTarget}회`);
+    }
+    setBusy(false);
+  }
+
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setMessage("로그아웃했습니다.");
+  }
+
+  if (!isSupabaseConfigured) {
+    return (
+      <section className="result-panel" aria-labelledby="result-title">
+        <div>
+          <p className="eyebrow dark">RESULT LOG</p>
+          <h3 id="result-title">결과 저장 준비 중</h3>
+        </div>
+        <p className="form-message">Supabase 배포 설정이 완료되면 이곳에서 기록할 수 있습니다.</p>
+      </section>
+    );
+  }
+
+  if (!session) {
+    return (
+      <section className="result-panel" aria-labelledby="result-title">
+        <div>
+          <p className="eyebrow dark">RESULT LOG</p>
+          <h3 id="result-title">이메일로 기록 시작</h3>
+          <p>기록은 로그인한 계정에만 보이며 Supabase에 저장됩니다.</p>
+        </div>
+        <form className="login-form" onSubmit={sendMagicLink}>
+          <label htmlFor="login-email">이메일</label>
+          <div>
+            <input
+              id="login-email"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              autoComplete="email"
+              placeholder="luke@example.com"
+              required
+            />
+            <button type="submit" disabled={busy}>
+              <LogIn size={16} aria-hidden="true" />
+              {busy ? "전송 중" : "로그인 링크 받기"}
+            </button>
+          </div>
+          {message && <p className="form-message" role="status">{message}</p>}
+        </form>
+      </section>
+    );
+  }
+
+  return (
+    <section className="result-panel" aria-labelledby="result-title">
+      <div className="result-heading">
+        <div>
+          <p className="eyebrow dark">RESULT LOG</p>
+          <h3 id="result-title">목요일 결과 입력</h3>
+          <p>5세트의 합계만 적으면 다음 목표를 자동 계산합니다.</p>
+        </div>
+        <button className="text-button" type="button" onClick={signOut}>
+          <LogOut size={14} aria-hidden="true" /> 로그아웃
+        </button>
+      </div>
+      <form className="result-form" onSubmit={saveResult}>
+        <label>
+          운동 날짜
+          <input
+            type="date"
+            min="2026-07-23"
+            max={END_DATE}
+            value={workoutDate}
+            onChange={(event) => setWorkoutDate(event.target.value)}
+            required
+          />
+        </label>
+        <label>
+          5세트 합계
+          <span className="number-input">
+            <input
+              type="number"
+              min="0"
+              step="1"
+              inputMode="numeric"
+              value={totalReps}
+              onChange={(event) => setTotalReps(event.target.value)}
+              required
+            />
+            <span>회</span>
+          </span>
+        </label>
+        <button className="save-button" type="submit" disabled={busy}>
+          <Save size={17} aria-hidden="true" />
+          {busy ? "저장 중" : savedRecord ? "기록 수정" : "결과 저장"}
+        </button>
+      </form>
+      <p className="rule-preview">
+        이번 목표 <strong>{savedRecord?.target_total ?? currentTarget}회</strong>
+        <span aria-hidden="true">→</span>
+        성공 시 <strong>+10</strong> · 실패 시 <strong>유지</strong>
+      </p>
+      {message && <p className="form-message" role="status">{message}</p>}
+    </section>
+  );
+}
+
 function App() {
   const today = useMemo(getSeoulToday, []);
   const monday = useMemo(() => getMonday(today), [today]);
   const [selectedId, setSelectedId] = useState(() => getTodayRoutineId(today));
-  const selected = routines.find((routine) => routine.id === selectedId) ?? routines[0];
+  const [session, setSession] = useState<Session | null>(null);
+  const [pushRecords, setPushRecords] = useState<WorkoutSession[]>([]);
   const todayId = getTodayRoutineId(today);
   const selectedRef = useRef<HTMLButtonElement>(null);
   const weekMapRef = useRef<HTMLDivElement>(null);
+  const pushTarget = nextPushTarget(pushRecords);
+  const routines = useMemo(() => buildRoutines(pushTarget, pushRecords[0]), [pushRecords, pushTarget]);
+  const selected = routines.find((routine) => routine.id === selectedId) ?? routines[0];
   const journeyDay = Math.min(
     TOTAL_DAYS,
     Math.max(1, Math.floor((today.getTime() - START_DATE.getTime()) / 86_400_000) + 1),
   );
   const week = Math.min(13, Math.max(1, Math.floor((journeyDay - 1) / 7) + 1));
+
+  async function loadRecords() {
+    if (!supabase) return;
+    const { data, error } = await supabase
+      .from("workout_sessions")
+      .select("id, workout_date, workout_type, target_total, total_reps, created_at")
+      .eq("workout_type", "pushup")
+      .order("workout_date", { ascending: false });
+    if (!error) setPushRecords((data ?? []) as WorkoutSession[]);
+  }
+
+  useEffect(() => {
+    if (!supabase) return;
+    void supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      if (!nextSession) setPushRecords([]);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (session) void loadRecords();
+  }, [session]);
 
   useLayoutEffect(() => {
     const container = weekMapRef.current;
@@ -171,7 +420,7 @@ function App() {
           <div className="hero-stats" aria-label="미션 현황">
             <div><span>NOW</span><strong>DAY {String(journeyDay).padStart(2, "0")}</strong></div>
             <div><span>CYCLE</span><strong>WEEK {week} / 13</strong></div>
-            <div><span>FINAL</span><strong>풀업 15 · 푸쉬업 60</strong></div>
+            <div><span>GOAL</span><strong>풀업 15 · 푸쉬업 60</strong></div>
           </div>
         </div>
       </header>
@@ -259,18 +508,23 @@ function App() {
                   <ArrowUpRight aria-hidden="true" />
                 </a>
               )}
+
+              {selected.id === "thu" && (
+                <PushResultForm
+                  session={session}
+                  records={pushRecords}
+                  currentTarget={pushTarget}
+                  defaultDate={getThisWeeksThursday(today)}
+                  onSaved={loadRecords}
+                />
+              )}
             </div>
           )}
         </section>
 
-        <section className="goal-strip" aria-label="90일 최종 목표">
-          <div><span>90-DAY GOAL</span><strong>풀업 1세트 15회</strong></div>
-          <ChevronRight aria-hidden="true" />
-          <div><span>90-DAY GOAL</span><strong>푸쉬업 1세트 60회</strong></div>
-        </section>
-
         <p className="safety">
           예리한 통증·흉통·어지럼증이 있으면 즉시 중단합니다. 이 페이지는 직접 정한 운동 계획을 정리한 것이며 의료 진단이나 치료를 대신하지 않습니다.
+          운동 기록은 Supabase의 로그인 계정에 저장되며, 이메일 주소 외 민감한 건강정보는 수집하지 않습니다.
         </p>
       </main>
 

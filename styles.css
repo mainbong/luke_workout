@@ -94,7 +94,7 @@ button { font: inherit; }
 .hero-stats strong { font-size: 14px; white-space: nowrap; }
 
 main { max-width: 1500px; margin: auto; }
-.week-section, .day-detail, .goal-strip, .safety { margin-right: clamp(18px, 4vw, 50px); margin-left: clamp(18px, 4vw, 50px); }
+.week-section, .day-detail, .safety { margin-right: clamp(18px, 4vw, 50px); margin-left: clamp(18px, 4vw, 50px); }
 .week-section { padding-top: 42px; }
 .week-heading { display: flex; align-items: end; justify-content: space-between; gap: 30px; margin-bottom: 16px; }
 .week-heading h2 { margin: 0; font-size: 28px; letter-spacing: -.045em; }
@@ -215,19 +215,85 @@ main { max-width: 1500px; margin: auto; }
 .video-link small { color: var(--lime); font-size: 8px; letter-spacing: .14em; }
 .empty-routine { display: flex; flex-direction: column; justify-content: center; }
 
-.goal-strip {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 25px;
-  align-items: center;
-  margin-top: 55px;
-  padding: 24px 28px;
-  color: white;
-  background: var(--coral);
+.result-panel {
+  margin-top: 26px;
+  padding: 22px;
+  background: #edf0df;
+  border: 1px solid #b9bea4;
 }
-.goal-strip > div { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-.goal-strip span { color: var(--deep); font-size: 9px; font-weight: 900; letter-spacing: .14em; }
-.goal-strip strong { font-size: 20px; }
+.result-panel h3 { margin: 0; font-size: 22px; letter-spacing: -.035em; }
+.result-panel > div > p:last-child,
+.result-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.result-heading { display: flex; align-items: start; justify-content: space-between; gap: 20px; }
+.login-form { margin-top: 17px; }
+.login-form label,
+.result-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+.login-form > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.login-form input,
+.result-form input {
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 12px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid #9ca393;
+  border-radius: 0;
+}
+.login-form button,
+.save-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  padding: 9px 16px;
+  color: white;
+  background: var(--navy);
+  border: 0;
+  font-weight: 900;
+  cursor: pointer;
+}
+.login-form button:disabled,
+.save-button:disabled { cursor: wait; opacity: .62; }
+.result-form {
+  display: grid;
+  grid-template-columns: minmax(160px, .8fr) minmax(140px, .65fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 18px;
+}
+.number-input { position: relative; display: block; }
+.number-input input { padding-right: 36px; }
+.number-input > span { position: absolute; top: 12px; right: 12px; color: var(--muted); font-size: 13px; }
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.rule-preview {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 15px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.rule-preview strong { color: var(--ink); }
+.form-message { margin: 10px 0 0; color: #742610; font-size: 12px; font-weight: 800; }
 .safety { margin-top: 25px; margin-bottom: 45px; color: var(--muted); font-size: 12px; }
 footer {
   display: flex;
@@ -279,9 +345,10 @@ footer {
   .current-target { align-items: flex-start; flex-direction: column; gap: 5px; }
   .exercise-list article { grid-template-columns: 25px 1fr; gap: 12px; }
   .exercise-list article > strong { grid-column: 2; text-align: left; }
-  .goal-strip { grid-template-columns: 1fr; margin-right: 18px; margin-left: 18px; }
-  .goal-strip > svg { display: none; }
-  .goal-strip > div { align-items: flex-start; flex-direction: column; gap: 2px; }
+  .result-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .login-form > div,
+  .result-form { grid-template-columns: 1fr; }
+  .rule-preview { align-items: flex-start; flex-wrap: wrap; }
   .safety { margin-right: 18px; margin-left: 18px; }
   footer { flex-direction: column; gap: 6px; }
 }

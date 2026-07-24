@@ -5,42 +5,60 @@
 
 ## 실행
 
-React 19, TypeScript 7, Vite 8 기반의 정적 프런트엔드입니다.
+React 19, TypeScript 7, Vite 8 기반의 프런트엔드이며, 운동 기록은 Supabase에 저장합니다.
 
 ```bash
 npm install
+cp .env.example .env.local
 npm run dev
 ```
 
-터미널에 출력된 로컬 주소를 브라우저에서 엽니다.
+`.env.local`에 Supabase Project URL과 publishable key를 입력한 뒤 터미널에 출력된
+로컬 주소를 브라우저에서 엽니다. 환경 변수가 없으면 루틴 열람은 가능하지만 기록 폼은
+비활성 상태로 표시됩니다.
 
 ## 배포
 
 GitHub Actions가 `main` 브랜치 변경을 감지해 Vite 빌드 결과를 GitHub Pages에 배포합니다.
+빌드에는 아래 GitHub Actions 설정값을 사용합니다.
 
-저장소의 **Settings → Pages → Build and deployment**에서 Source를
-**GitHub Actions**로 설정해야 합니다.
+- Repository variable: `VITE_SUPABASE_URL`
+- Repository secret: `VITE_SUPABASE_PUBLISHABLE_KEY`
 
 ## 페이지 범위
 
 - 상단의 월~일 미니맵에서 요일을 선택하면 해당 하루의 루틴만 표시합니다.
 - 기본 선택은 한국 시간 기준 오늘입니다.
 - 월·화·수·일은 사용자가 루틴을 정하기 전까지 `루틴 미정`으로 유지합니다.
-- 개인정보를 입력하거나 저장하는 기능은 없습니다.
 - 금요일 푸쉬업 기술 훈련은 연결된 YouTube 영상의 20분 루틴을 따릅니다.
+- 목요일 결과는 이메일 매직 링크 로그인 후 날짜와 5세트 합계만 저장합니다.
+- 해당 회차의 합계가 목표 이상이면 다음 목표가 10회 증가하고, 미달이면 유지됩니다.
 
 ## 프로젝트 구조
 
 ```text
 .
+├── .github/workflows/deploy-pages.yml # GitHub Pages 빌드·배포
 ├── src/
-│   ├── App.tsx  # 90일 목표와 요일별 운동 프로그램
-│   └── main.tsx # React 진입점
-├── index.html   # Vite HTML 진입점
-├── styles.css   # 7열 달력, 모바일 카드, 접근성
+│   ├── App.tsx       # 주간 루틴, 로그인, 결과 입력과 목표 계산
+│   ├── supabase.ts   # Supabase 브라우저 클라이언트
+│   └── main.tsx      # React 진입점
+├── supabase/
+│   ├── config.toml   # Auth 허용 URL 등 프로젝트 설정
+│   └── migrations/   # workout_sessions 테이블과 RLS 정책
+├── index.html
+├── styles.css
 ├── vite.config.ts
 └── README.md
 ```
+
+## 데이터와 보안
+
+- `workout_sessions`에는 로그인 사용자 ID, 운동 날짜, 종목, 당시 목표와 합계만 저장합니다.
+- Row Level Security(RLS)로 로그인한 사용자가 자신의 기록만 조회·작성·수정·삭제할 수 있습니다.
+- 이메일 주소는 Supabase Auth가 로그인 용도로 관리하며 앱의 운동 기록 테이블에는 저장하지 않습니다.
+- DB 비밀번호와 secret/service-role key는 프런트엔드 및 저장소에 넣지 않습니다.
+- Supabase Free 플랜의 사용량·휴면 정책을 따르며, 계정이 같으면 다른 기기에서도 기록을 볼 수 있습니다.
 
 ## 운동 프로그램 원칙
 
