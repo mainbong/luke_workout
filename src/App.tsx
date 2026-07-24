@@ -40,7 +40,7 @@ const workouts: Workout[] = [
       {
         name: "이번 미션 총량",
         prescription: "100회",
-        note: "성공하면 다음 푸쉬업 맥스 날 +10회, 실패하면 목표 유지.",
+        note: "5세트 합계 기준. 7월 23일 첫 기록은 83회.",
       },
     ],
   },
@@ -85,9 +85,9 @@ const workouts: Workout[] = [
         note: "최대 10세트. 세트 간 1분 30초.",
       },
       {
-        name: "미션 판정",
-        prescription: "총 30회 달성",
-        note: "성공하면 다음 풀업 날 +10회, 실패하면 목표 유지.",
+        name: "이번 미션 총량",
+        prescription: "총 30회",
+        note: "10세트 안에서 30회를 채우는 데 집중.",
       },
       {
         name: "러닝머신",
