@@ -18,6 +18,7 @@ type Exercise = {
   name: string;
   prescription: string;
   note?: string;
+  guides?: { label: string; url: string }[];
 };
 
 type Routine = {
@@ -186,7 +187,78 @@ function buildRoutines(
         },
       ],
     },
-    { id: "sun", day: "SUN", ko: "일요일", status: "pending", short: "루틴 미정" },
+    {
+      id: "sun",
+      day: "SUN",
+      ko: "일요일",
+      status: "ready",
+      short: "등 볼륨 + 러닝",
+      category: "BACK VOLUME",
+      title: "등 볼륨 루틴 + 러닝머신",
+      summary: "반복 수와 자세를 우선하며, 정한 규칙에 따라 보조·증량·감량을 적용합니다.",
+      target: "오늘 목표 · 등 운동 4종 + 러닝머신 10분",
+      exercises: [
+        {
+          name: "풀업",
+          prescription: "3회 × 5세트",
+          note: "맨몸으로 시작. 3회를 채우지 못하는 순간 풀업머신으로 전환해 해당 세트의 3회를 채웁니다. 예: 2개째에서 실패하면 보조중량을 최소로 놓고 2개 추가.",
+          guides: [
+            {
+              label: "보조 풀업머신 셋업·안전",
+              url: "https://www.youtube.com/watch?v=fnHeovkmkkk",
+            },
+          ],
+        },
+        {
+          name: "케이블 로우",
+          prescription: "15회 × 5세트",
+          note: "15회를 당겨 RPE 8인 시작 무게를 정합니다. 매 세트 한 칸씩 증량하며 15회를 채우고, 실패하면 증량을 멈춘 뒤 남은 세트는 같은 무게로 가능한 최대 횟수까지 진행합니다.",
+          guides: [
+            {
+              label: "시티드 케이블 로우 전체 가이드",
+              url: "https://www.youtube.com/watch?v=CsROhQ1onAg",
+            },
+          ],
+        },
+        {
+          name: "케이블 스트레이트 암 풀다운",
+          prescription: "15회 × 5세트",
+          note: "첫 15회가 RPE 8인 무게를 찾고 같은 무게로 5세트를 진행합니다. 15회에 실패하면 자세를 유지할 수 있도록 계속 감량하면서 15회를 채웁니다.",
+          guides: [
+            {
+              label: "스트레이트 암 풀다운 셋업·자세",
+              url: "https://www.youtube.com/watch?v=98W63pVdW38",
+            },
+          ],
+        },
+        {
+          name: "케이블 페이스풀",
+          prescription: "15회 × 5세트",
+          note: "셋업과 자세를 미리 충분히 숙지합니다. 첫 15회가 RPE 8인 무게로 시작하고, 이후 15회에 실패하면 감량하면서 매 세트 15회를 채웁니다.",
+          guides: [
+            {
+              label: "페이스풀 실수 10가지와 교정",
+              url: "https://www.youtube.com/watch?v=cc0tasCalHg",
+            },
+          ],
+        },
+        {
+          name: "러닝머신",
+          prescription: "속도 10 이상 · 10분",
+          note: "등 운동을 모두 마친 뒤 진행합니다.",
+          guides: [
+            {
+              label: "Life Fitness 러닝머신 조작 예시",
+              url: "https://www.youtube.com/watch?v=usScM1QZrQw",
+            },
+            {
+              label: "기본 러닝 자세",
+              url: "https://www.youtube.com/watch?v=_kGESn8ArrU",
+            },
+          ],
+        },
+      ],
+    },
   ];
 }
 
@@ -196,6 +268,7 @@ function WorkoutResultForm({
   records,
   currentTarget,
   defaultDate,
+  initialMessage,
   onSaved,
 }: {
   workoutType: "pushup" | "pullup";
@@ -203,6 +276,7 @@ function WorkoutResultForm({
   records: WorkoutSession[];
   currentTarget: number;
   defaultDate: string;
+  initialMessage?: string;
   onSaved: () => Promise<void>;
 }) {
   const isPullup = workoutType === "pullup";
@@ -212,9 +286,13 @@ function WorkoutResultForm({
     !isPullup && defaultDate === FIRST_PUSH_RECORD.workout_date ? String(FIRST_PUSH_RECORD.total_reps) : "",
   );
   const [setCount, setSetCount] = useState("");
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(initialMessage ?? "");
   const [busy, setBusy] = useState(false);
   const savedRecord = records.find((record) => record.workout_date === workoutDate);
+
+  useEffect(() => {
+    if (initialMessage) setMessage(initialMessage);
+  }, [initialMessage]);
 
   useEffect(() => {
     if (savedRecord) {
@@ -236,10 +314,14 @@ function WorkoutResultForm({
     setMessage("");
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: window.location.href.split("#")[0] },
+      options: { emailRedirectTo: `${window.location.origin}${import.meta.env.BASE_URL}` },
     });
     setBusy(false);
-    setMessage(error ? error.message : "로그인 링크를 이메일로 보냈습니다. 같은 브라우저에서 열어주세요.");
+    setMessage(
+      error
+        ? error.message
+        : "새 로그인 링크를 보냈습니다. 가장 최근 메일의 링크를 한 번만 열어주세요.",
+    );
   }
 
   async function saveResult(event: FormEvent<HTMLFormElement>) {
@@ -319,7 +401,7 @@ function WorkoutResultForm({
         <div>
           <p className="eyebrow dark">RESULT LOG</p>
           <h3 id="result-title">이메일로 기록 시작</h3>
-          <p>기록은 로그인한 계정에만 보이며 Supabase에 저장됩니다.</p>
+          <p>가장 최근에 받은 링크를 한 번만 열어주세요. 기록은 해당 계정에만 보입니다.</p>
         </div>
         <form className="login-form" onSubmit={sendMagicLink}>
           <label htmlFor={`${workoutType}-login-email`}>이메일</label>
@@ -335,7 +417,7 @@ function WorkoutResultForm({
             />
             <button type="submit" disabled={busy}>
               <LogIn size={16} aria-hidden="true" />
-              {busy ? "전송 중" : "로그인 링크 받기"}
+              {busy ? "전송 중" : initialMessage ? "새 링크 받기" : "로그인 링크 받기"}
             </button>
           </div>
           {message && <p className="form-message" role="status">{message}</p>}
@@ -430,6 +512,7 @@ function App() {
   const monday = useMemo(() => getMonday(today), [today]);
   const [selectedId, setSelectedId] = useState(() => getTodayRoutineId(today));
   const [session, setSession] = useState<Session | null>(null);
+  const [authNotice, setAuthNotice] = useState("");
   const [pushRecords, setPushRecords] = useState<WorkoutSession[]>([]);
   const [pullRecords, setPullRecords] = useState<WorkoutSession[]>([]);
   const todayId = getTodayRoutineId(today);
@@ -475,6 +558,15 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    if (params.get("error_code") === "otp_expired") {
+      setAuthNotice("기존 이메일 링크가 만료됐습니다. 이메일을 입력해 새 로그인 링크를 받아주세요.");
+      setSelectedId("thu");
+      window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}`);
+    }
+  }, []);
+
+  useEffect(() => {
     if (session) void loadRecords();
   }, [session]);
 
@@ -495,7 +587,13 @@ function App() {
             <span className="brand-mark"><Dumbbell size={17} aria-hidden="true" /></span>
             <span>LUKE / 90 DAYS</span>
           </a>
-          <span className="period">2026.07.23 — 10.20</span>
+          <div className="topbar-meta">
+            <span className={`auth-state ${session ? "connected" : ""}`}>
+              <span aria-hidden="true" />
+              {session ? "기록 로그인됨" : "기록 미로그인"}
+            </span>
+            <span className="period">2026.07.23 — 10.20</span>
+          </div>
         </nav>
 
         <div className="compact-hero" id="top">
@@ -513,6 +611,13 @@ function App() {
       </header>
 
       <main>
+        {authNotice && (
+          <div className="auth-alert" role="alert">
+            <strong>로그인 링크 만료</strong>
+            <span>{authNotice}</span>
+            <button type="button" onClick={() => setAuthNotice("")} aria-label="로그인 알림 닫기">×</button>
+          </div>
+        )}
         <section className="week-section" aria-labelledby="week-title">
           <div className="week-heading">
             <div>
@@ -582,7 +687,21 @@ function App() {
                 {selected.exercises?.map((exercise, index) => (
                   <article key={exercise.name}>
                     <span>{String(index + 1).padStart(2, "0")}</span>
-                    <div><h3>{exercise.name}</h3>{exercise.note && <p>{exercise.note}</p>}</div>
+                    <div>
+                      <h3>{exercise.name}</h3>
+                      {exercise.note && <p>{exercise.note}</p>}
+                      {exercise.guides && (
+                        <div className="exercise-guide-links" aria-label={`${exercise.name} 영상 가이드`}>
+                          {exercise.guides.map((guide) => (
+                            <a key={guide.url} className="exercise-guide" href={guide.url} target="_blank" rel="noreferrer">
+                              <Play size={10} fill="currentColor" aria-hidden="true" />
+                              {guide.label}
+                              <ArrowUpRight size={11} aria-hidden="true" />
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     <strong>{exercise.prescription}</strong>
                   </article>
                 ))}
@@ -603,6 +722,7 @@ function App() {
                   records={pushRecords}
                   currentTarget={pushTarget}
                   defaultDate={getThisWeeksThursday(today)}
+                  initialMessage={authNotice}
                   onSaved={loadRecords}
                 />
               )}
@@ -613,6 +733,7 @@ function App() {
                   records={pullRecords}
                   currentTarget={pullTarget}
                   defaultDate={getThisWeeksSaturday(today)}
+                  initialMessage={authNotice}
                   onSaved={loadRecords}
                 />
               )}
