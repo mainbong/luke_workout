@@ -7,7 +7,7 @@ const START_DATE = new Date("2026-07-23T00:00:00+09:00");
 const END_DATE = "2026-10-20";
 const TOTAL_DAYS = 90;
 const PUSH_START_TARGET = 100;
-const PULL_TARGET = 30;
+const PULL_START_TARGET = 30;
 const FIRST_PUSH_RECORD = {
   workout_date: "2026-07-23",
   target_total: 100,
@@ -66,6 +66,13 @@ function getThisWeeksThursday(today: Date) {
   return toDateInputValue(thursday);
 }
 
+function getThisWeeksSaturday(today: Date) {
+  const monday = getMonday(today);
+  const saturday = new Date(monday);
+  saturday.setDate(monday.getDate() + 5);
+  return toDateInputValue(saturday);
+}
+
 function formatWorkoutDate(value: string) {
   const [, month, day] = value.split("-").map(Number);
   return `${month}월 ${day}일`;
@@ -79,8 +86,22 @@ function nextPushTarget(records: WorkoutSession[]) {
     : latest.target_total;
 }
 
-function buildRoutines(pushTarget: number, latestRecord?: WorkoutSession): Routine[] {
-  const record = latestRecord ?? FIRST_PUSH_RECORD;
+function nextPullTarget(records: WorkoutSession[]) {
+  if (records.length === 0) return PULL_START_TARGET;
+  const latest = records[0];
+  return latest.total_reps >= latest.target_total && latest.set_count !== null && latest.set_count <= 10
+    ? latest.target_total + 10
+    : latest.target_total;
+}
+
+function buildRoutines(
+  pushTarget: number,
+  pullTarget: number,
+  week: number,
+  latestPushRecord?: WorkoutSession,
+  latestPullRecord?: WorkoutSession,
+): Routine[] {
+  const pushRecord = latestPushRecord ?? FIRST_PUSH_RECORD;
 
   return [
     { id: "mon", day: "MON", ko: "월요일", status: "pending", short: "루틴 미정" },
@@ -96,7 +117,7 @@ function buildRoutines(pushTarget: number, latestRecord?: WorkoutSession): Routi
       title: "푸쉬업 맥스 미션",
       summary: "근력 운동처럼 세트마다 1분 30초를 쉬며 최대 반복을 수행합니다.",
       target: `현재 목표 · 5세트 합계 ${pushTarget}회`,
-      record: `${formatWorkoutDate(record.workout_date)} 최근 기록 · ${record.total_reps} / ${record.target_total}회`,
+      record: `${formatWorkoutDate(pushRecord.workout_date)} 최근 기록 · ${pushRecord.total_reps} / ${pushRecord.target_total}회`,
       exercises: [
         {
           name: "푸쉬업",
@@ -140,16 +161,19 @@ function buildRoutines(pushTarget: number, latestRecord?: WorkoutSession): Routi
       day: "SAT",
       ko: "토요일",
       status: "ready",
-      short: `풀업 ${PULL_TARGET}`,
+      short: `풀업 ${pullTarget}`,
       category: "WEIGHT PULL",
       title: "풀업 미션 + 러닝머신",
       summary: "풀업을 웨이트 세트처럼 수행한 뒤 러닝머신을 진행합니다.",
-      target: `현재 목표 · 풀업 총 ${PULL_TARGET}회`,
+      target: `현재 목표 · 풀업 총 ${pullTarget}회`,
+      record: latestPullRecord
+        ? `${formatWorkoutDate(latestPullRecord.workout_date)} 최근 기록 · ${latestPullRecord.total_reps} / ${latestPullRecord.target_total}회 · ${latestPullRecord.set_count}세트`
+        : undefined,
       exercises: [
         {
           name: "풀업 미션",
-          prescription: `총 ${PULL_TARGET}회 · 최대 10세트`,
-          note: "보조 중량 조건 없음.",
+          prescription: `총 ${pullTarget}회 · 완료할 때까지`,
+          note: "완료에 든 세트 수를 기록. 10세트 안에 완료하면 다음 주 목표 +10회. 보조 중량 조건 없음.",
         },
         {
           name: "세트 간 휴식",
@@ -157,7 +181,8 @@ function buildRoutines(pushTarget: number, latestRecord?: WorkoutSession): Routi
         },
         {
           name: "러닝머신",
-          prescription: "풀업 미션 후 진행",
+          prescription: week === 1 ? "속도 10 이상 · 10분" : "속도 10 이상 · 시간은 추후 지정",
+          note: "풀업 미션을 마친 뒤 진행.",
         },
       ],
     },
@@ -165,24 +190,28 @@ function buildRoutines(pushTarget: number, latestRecord?: WorkoutSession): Routi
   ];
 }
 
-function PushResultForm({
+function WorkoutResultForm({
+  workoutType,
   session,
   records,
   currentTarget,
   defaultDate,
   onSaved,
 }: {
+  workoutType: "pushup" | "pullup";
   session: Session | null;
   records: WorkoutSession[];
   currentTarget: number;
   defaultDate: string;
   onSaved: () => Promise<void>;
 }) {
+  const isPullup = workoutType === "pullup";
   const [email, setEmail] = useState("");
   const [workoutDate, setWorkoutDate] = useState(defaultDate);
   const [totalReps, setTotalReps] = useState(
-    defaultDate === FIRST_PUSH_RECORD.workout_date ? String(FIRST_PUSH_RECORD.total_reps) : "",
+    !isPullup && defaultDate === FIRST_PUSH_RECORD.workout_date ? String(FIRST_PUSH_RECORD.total_reps) : "",
   );
+  const [setCount, setSetCount] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const savedRecord = records.find((record) => record.workout_date === workoutDate);
@@ -190,12 +219,15 @@ function PushResultForm({
   useEffect(() => {
     if (savedRecord) {
       setTotalReps(String(savedRecord.total_reps));
-    } else if (workoutDate === FIRST_PUSH_RECORD.workout_date) {
+      setSetCount(savedRecord.set_count === null ? "" : String(savedRecord.set_count));
+    } else if (!isPullup && workoutDate === FIRST_PUSH_RECORD.workout_date) {
       setTotalReps(String(FIRST_PUSH_RECORD.total_reps));
+      setSetCount("");
     } else {
       setTotalReps("");
+      setSetCount("");
     }
-  }, [savedRecord, workoutDate]);
+  }, [isPullup, savedRecord, workoutDate]);
 
   async function sendMagicLink(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -213,15 +245,28 @@ function PushResultForm({
   async function saveResult(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!supabase || !session) return;
-    const reps = Number(totalReps);
-    if (!Number.isInteger(reps) || reps < 0) {
-      setMessage("합계는 0 이상의 정수로 입력해주세요.");
+    const sets = isPullup ? Number(setCount) : null;
+    if (isPullup && (!Number.isInteger(sets) || sets === null || sets < 1)) {
+      setMessage("풀업 완료 세트 수는 1 이상의 정수로 입력해주세요.");
+      return;
+    }
+    const workoutDay = new Date(`${workoutDate}T00:00:00+09:00`).getDay();
+    const expectedDay = isPullup ? 6 : 4;
+    if (workoutDay !== expectedDay) {
+      setMessage(`${isPullup ? "풀업" : "푸쉬업"} 기록은 ${isPullup ? "토요일" : "목요일"} 날짜로 입력해주세요.`);
       return;
     }
 
     const existing = records.find((record) => record.workout_date === workoutDate);
     const target = existing?.target_total
-      ?? (workoutDate === FIRST_PUSH_RECORD.workout_date ? FIRST_PUSH_RECORD.target_total : currentTarget);
+      ?? (!isPullup && workoutDate === FIRST_PUSH_RECORD.workout_date
+        ? FIRST_PUSH_RECORD.target_total
+        : currentTarget);
+    const reps = isPullup ? target : Number(totalReps);
+    if (!Number.isInteger(reps) || reps < 0) {
+      setMessage("합계는 0 이상의 정수로 입력해주세요.");
+      return;
+    }
 
     setBusy(true);
     setMessage("");
@@ -229,9 +274,10 @@ function PushResultForm({
       {
         user_id: session.user.id,
         workout_date: workoutDate,
-        workout_type: "pushup",
+        workout_type: workoutType,
         target_total: target,
         total_reps: reps,
+        set_count: sets,
       },
       { onConflict: "user_id,workout_date,workout_type" },
     );
@@ -240,7 +286,10 @@ function PushResultForm({
       setMessage(`저장하지 못했습니다: ${error.message}`);
     } else {
       await onSaved();
-      const followingTarget = reps >= target ? target + 10 : target;
+      const succeeded = isPullup
+        ? sets !== null && sets <= 10
+        : reps >= target;
+      const followingTarget = succeeded ? target + 10 : target;
       setMessage(`저장 완료 · 다음 목표 ${followingTarget}회`);
     }
     setBusy(false);
@@ -273,10 +322,10 @@ function PushResultForm({
           <p>기록은 로그인한 계정에만 보이며 Supabase에 저장됩니다.</p>
         </div>
         <form className="login-form" onSubmit={sendMagicLink}>
-          <label htmlFor="login-email">이메일</label>
+          <label htmlFor={`${workoutType}-login-email`}>이메일</label>
           <div>
             <input
-              id="login-email"
+              id={`${workoutType}-login-email`}
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
@@ -300,14 +349,18 @@ function PushResultForm({
       <div className="result-heading">
         <div>
           <p className="eyebrow dark">RESULT LOG</p>
-          <h3 id="result-title">목요일 결과 입력</h3>
-          <p>5세트의 합계만 적으면 다음 목표를 자동 계산합니다.</p>
+          <h3 id="result-title">{isPullup ? "토요일 풀업 결과 입력" : "목요일 푸쉬업 결과 입력"}</h3>
+          <p>
+            {isPullup
+              ? "목표 횟수를 완료하는 데 사용한 세트 수를 적으면 다음 목표를 자동 계산합니다."
+              : "5세트의 합계만 적으면 다음 목표를 자동 계산합니다."}
+          </p>
         </div>
         <button className="text-button" type="button" onClick={signOut}>
           <LogOut size={14} aria-hidden="true" /> 로그아웃
         </button>
       </div>
-      <form className="result-form" onSubmit={saveResult}>
+      <form className={`result-form ${isPullup ? "pullup" : ""}`} onSubmit={saveResult}>
         <label>
           운동 날짜
           <input
@@ -319,21 +372,40 @@ function PushResultForm({
             required
           />
         </label>
-        <label>
-          5세트 합계
-          <span className="number-input">
-            <input
-              type="number"
-              min="0"
-              step="1"
-              inputMode="numeric"
-              value={totalReps}
-              onChange={(event) => setTotalReps(event.target.value)}
-              required
-            />
-            <span>회</span>
-          </span>
-        </label>
+        {!isPullup && (
+          <label>
+            5세트 합계
+            <span className="number-input">
+              <input
+                type="number"
+                min="0"
+                step="1"
+                inputMode="numeric"
+                value={totalReps}
+                onChange={(event) => setTotalReps(event.target.value)}
+                required
+              />
+              <span>회</span>
+            </span>
+          </label>
+        )}
+        {isPullup && (
+          <label>
+            완료 세트 수
+            <span className="number-input">
+              <input
+                type="number"
+                min="1"
+                step="1"
+                inputMode="numeric"
+                value={setCount}
+                onChange={(event) => setSetCount(event.target.value)}
+                required
+              />
+              <span>세트</span>
+            </span>
+          </label>
+        )}
         <button className="save-button" type="submit" disabled={busy}>
           <Save size={17} aria-hidden="true" />
           {busy ? "저장 중" : savedRecord ? "기록 수정" : "결과 저장"}
@@ -342,7 +414,11 @@ function PushResultForm({
       <p className="rule-preview">
         이번 목표 <strong>{savedRecord?.target_total ?? currentTarget}회</strong>
         <span aria-hidden="true">→</span>
-        성공 시 <strong>+10</strong> · 실패 시 <strong>유지</strong>
+        {isPullup ? (
+          <>10세트 이내 <strong>+10</strong> · 11세트 이상 <strong>유지</strong></>
+        ) : (
+          <>성공 <strong>+10</strong> · 실패 <strong>유지</strong></>
+        )}
       </p>
       {message && <p className="form-message" role="status">{message}</p>}
     </section>
@@ -355,26 +431,34 @@ function App() {
   const [selectedId, setSelectedId] = useState(() => getTodayRoutineId(today));
   const [session, setSession] = useState<Session | null>(null);
   const [pushRecords, setPushRecords] = useState<WorkoutSession[]>([]);
+  const [pullRecords, setPullRecords] = useState<WorkoutSession[]>([]);
   const todayId = getTodayRoutineId(today);
   const selectedRef = useRef<HTMLButtonElement>(null);
   const weekMapRef = useRef<HTMLDivElement>(null);
-  const pushTarget = nextPushTarget(pushRecords);
-  const routines = useMemo(() => buildRoutines(pushTarget, pushRecords[0]), [pushRecords, pushTarget]);
-  const selected = routines.find((routine) => routine.id === selectedId) ?? routines[0];
   const journeyDay = Math.min(
     TOTAL_DAYS,
     Math.max(1, Math.floor((today.getTime() - START_DATE.getTime()) / 86_400_000) + 1),
   );
   const week = Math.min(13, Math.max(1, Math.floor((journeyDay - 1) / 7) + 1));
+  const pushTarget = nextPushTarget(pushRecords);
+  const pullTarget = nextPullTarget(pullRecords);
+  const routines = useMemo(
+    () => buildRoutines(pushTarget, pullTarget, week, pushRecords[0], pullRecords[0]),
+    [pullRecords, pullTarget, pushRecords, pushTarget, week],
+  );
+  const selected = routines.find((routine) => routine.id === selectedId) ?? routines[0];
 
   async function loadRecords() {
     if (!supabase) return;
     const { data, error } = await supabase
       .from("workout_sessions")
-      .select("id, workout_date, workout_type, target_total, total_reps, created_at")
-      .eq("workout_type", "pushup")
+      .select("id, workout_date, workout_type, target_total, total_reps, set_count, created_at")
       .order("workout_date", { ascending: false });
-    if (!error) setPushRecords((data ?? []) as WorkoutSession[]);
+    if (!error) {
+      const records = (data ?? []) as WorkoutSession[];
+      setPushRecords(records.filter((record) => record.workout_type === "pushup"));
+      setPullRecords(records.filter((record) => record.workout_type === "pullup"));
+    }
   }
 
   useEffect(() => {
@@ -382,7 +466,10 @@ function App() {
     void supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
-      if (!nextSession) setPushRecords([]);
+      if (!nextSession) {
+        setPushRecords([]);
+        setPullRecords([]);
+      }
     });
     return () => listener.subscription.unsubscribe();
   }, []);
@@ -510,11 +597,22 @@ function App() {
               )}
 
               {selected.id === "thu" && (
-                <PushResultForm
+                <WorkoutResultForm
+                  workoutType="pushup"
                   session={session}
                   records={pushRecords}
                   currentTarget={pushTarget}
                   defaultDate={getThisWeeksThursday(today)}
+                  onSaved={loadRecords}
+                />
+              )}
+              {selected.id === "sat" && (
+                <WorkoutResultForm
+                  workoutType="pullup"
+                  session={session}
+                  records={pullRecords}
+                  currentTarget={pullTarget}
+                  defaultDate={getThisWeeksSaturday(today)}
                   onSaved={loadRecords}
                 />
               )}

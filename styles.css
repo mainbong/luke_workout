@@ -269,6 +269,9 @@ main { max-width: 1500px; margin: auto; }
   align-items: end;
   margin-top: 18px;
 }
+.result-form.pullup {
+  grid-template-columns: minmax(160px, .8fr) minmax(140px, .65fr) auto;
+}
 .number-input { position: relative; display: block; }
 .number-input input { padding-right: 36px; }
 .number-input > span { position: absolute; top: 12px; right: 12px; color: var(--muted); font-size: 13px; }

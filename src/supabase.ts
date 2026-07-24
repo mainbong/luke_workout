@@ -20,5 +20,6 @@ export type WorkoutSession = {
   workout_type: "pushup" | "pullup";
   target_total: number;
   total_reps: number;
+  set_count: number | null;
   created_at: string;
 };
