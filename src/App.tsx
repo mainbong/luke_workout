@@ -1,18 +1,18 @@
 import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { ArrowUpRight, Check, Dumbbell, LogIn, LogOut, Play, Save } from "lucide-react";
-import { isSupabaseConfigured, supabase, type WorkoutSession } from "./supabase";
+import {
+  isSupabaseConfigured,
+  supabase,
+  type RoutineCompletion,
+  type WorkoutSession,
+} from "./supabase";
 
 const START_DATE = new Date("2026-07-23T00:00:00+09:00");
 const END_DATE = "2026-10-20";
 const TOTAL_DAYS = 90;
 const PUSH_START_TARGET = 100;
 const PULL_START_TARGET = 30;
-const FIRST_PUSH_RECORD = {
-  workout_date: "2026-07-23",
-  target_total: 100,
-  total_reps: 83,
-};
 
 type Exercise = {
   name: string;
@@ -25,7 +25,7 @@ type Routine = {
   id: string;
   day: string;
   ko: string;
-  status: "pending" | "ready" | "done";
+  status: "pending" | "ready";
   short: string;
   title?: string;
   category?: string;
@@ -63,8 +63,7 @@ function getThisWeeksThursday(today: Date) {
   const monday = getMonday(today);
   const thursday = new Date(monday);
   thursday.setDate(monday.getDate() + 3);
-  if (thursday < START_DATE) return FIRST_PUSH_RECORD.workout_date;
-  return toDateInputValue(thursday);
+  return toDateInputValue(thursday < START_DATE ? START_DATE : thursday);
 }
 
 function getThisWeeksSaturday(today: Date) {
@@ -102,8 +101,6 @@ function buildRoutines(
   latestPushRecord?: WorkoutSession,
   latestPullRecord?: WorkoutSession,
 ): Routine[] {
-  const pushRecord = latestPushRecord ?? FIRST_PUSH_RECORD;
-
   return [
     { id: "mon", day: "MON", ko: "월요일", status: "pending", short: "루틴 미정" },
     { id: "tue", day: "TUE", ko: "화요일", status: "pending", short: "루틴 미정" },
@@ -112,13 +109,15 @@ function buildRoutines(
       id: "thu",
       day: "THU",
       ko: "목요일",
-      status: "done",
+      status: "ready",
       short: `푸쉬업 ${pushTarget}`,
       category: "WEIGHT PUSH",
       title: "푸쉬업 맥스 미션",
       summary: "근력 운동처럼 세트마다 1분 30초를 쉬며 최대 반복을 수행합니다.",
       target: `현재 목표 · 5세트 합계 ${pushTarget}회`,
-      record: `${formatWorkoutDate(pushRecord.workout_date)} 최근 기록 · ${pushRecord.total_reps} / ${pushRecord.target_total}회`,
+      record: latestPushRecord
+        ? `${formatWorkoutDate(latestPushRecord.workout_date)} 최근 기록 · ${latestPushRecord.total_reps} / ${latestPushRecord.target_total}회`
+        : undefined,
       exercises: [
         {
           name: "푸쉬업",
@@ -290,9 +289,7 @@ function WorkoutResultForm({
   const isPullup = workoutType === "pullup";
   const [email, setEmail] = useState("");
   const [workoutDate, setWorkoutDate] = useState(defaultDate);
-  const [totalReps, setTotalReps] = useState(
-    !isPullup && defaultDate === FIRST_PUSH_RECORD.workout_date ? String(FIRST_PUSH_RECORD.total_reps) : "",
-  );
+  const [totalReps, setTotalReps] = useState("");
   const [setCount, setSetCount] = useState("");
   const [message, setMessage] = useState(initialMessage ?? "");
   const [busy, setBusy] = useState(false);
@@ -306,9 +303,6 @@ function WorkoutResultForm({
     if (savedRecord) {
       setTotalReps(String(savedRecord.total_reps));
       setSetCount(savedRecord.set_count === null ? "" : String(savedRecord.set_count));
-    } else if (!isPullup && workoutDate === FIRST_PUSH_RECORD.workout_date) {
-      setTotalReps(String(FIRST_PUSH_RECORD.total_reps));
-      setSetCount("");
     } else {
       setTotalReps("");
       setSetCount("");
@@ -348,10 +342,7 @@ function WorkoutResultForm({
     }
 
     const existing = records.find((record) => record.workout_date === workoutDate);
-    const target = existing?.target_total
-      ?? (!isPullup && workoutDate === FIRST_PUSH_RECORD.workout_date
-        ? FIRST_PUSH_RECORD.target_total
-        : currentTarget);
+    const target = existing?.target_total ?? currentTarget;
     const reps = isPullup ? target : Number(totalReps);
     if (!Number.isInteger(reps) || reps < 0) {
       setMessage("합계는 0 이상의 정수로 입력해주세요.");
@@ -515,6 +506,150 @@ function WorkoutResultForm({
   );
 }
 
+function RoutineCompletionPanel({
+  routine,
+  workoutDate,
+  session,
+  completed,
+  onChanged,
+}: {
+  routine: Routine;
+  workoutDate: string;
+  session: Session | null;
+  completed: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  const [email, setEmail] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function sendMagicLink(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase) return;
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: `${window.location.origin}${import.meta.env.BASE_URL}` },
+    });
+    setBusy(false);
+    setMessage(
+      error
+        ? error.message
+        : "로그인 링크를 보냈습니다. 가장 최근 메일의 링크를 한 번만 열어주세요.",
+    );
+  }
+
+  async function toggleCompletion() {
+    if (!supabase || !session) return;
+    setBusy(true);
+    setMessage("");
+
+    const query = completed
+      ? supabase
+          .from("routine_completions")
+          .delete()
+          .eq("workout_date", workoutDate)
+          .eq("routine_id", routine.id)
+      : supabase.from("routine_completions").upsert(
+          {
+            user_id: session.user.id,
+            workout_date: workoutDate,
+            routine_id: routine.id,
+          },
+          { onConflict: "user_id,workout_date,routine_id" },
+        );
+    const { error } = await query;
+
+    if (error) {
+      setMessage(`완료 상태를 저장하지 못했습니다: ${error.message}`);
+    } else {
+      await onChanged();
+      setMessage(completed ? "완료 체크를 취소했습니다." : "운동 완료를 기록했습니다.");
+    }
+    setBusy(false);
+  }
+
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+  }
+
+  if (!isSupabaseConfigured) {
+    return (
+      <section className="result-panel completion-panel" aria-labelledby="completion-title">
+        <div>
+          <p className="eyebrow dark">COMPLETION LOG</p>
+          <h3 id="completion-title">완료 기록 준비 중</h3>
+        </div>
+        <p className="form-message">Supabase 배포 설정이 완료되면 이곳에서 완료 체크할 수 있습니다.</p>
+      </section>
+    );
+  }
+
+  if (!session) {
+    return (
+      <section className="result-panel completion-panel" aria-labelledby="completion-title">
+        <div>
+          <p className="eyebrow dark">COMPLETION LOG</p>
+          <h3 id="completion-title">로그인하고 완료 체크</h3>
+          <p>완료 상태는 로그인한 계정에 저장됩니다.</p>
+        </div>
+        <form className="login-form" onSubmit={sendMagicLink}>
+          <label htmlFor={`${routine.id}-completion-email`}>이메일</label>
+          <div>
+            <input
+              id={`${routine.id}-completion-email`}
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              autoComplete="email"
+              placeholder="luke@example.com"
+              required
+            />
+            <button type="submit" disabled={busy}>
+              <LogIn size={16} aria-hidden="true" />
+              {busy ? "전송 중" : "로그인 링크 받기"}
+            </button>
+          </div>
+          {message && <p className="form-message" role="status">{message}</p>}
+        </form>
+      </section>
+    );
+  }
+
+  return (
+    <section className="result-panel completion-panel" aria-labelledby="completion-title">
+      <div className="result-heading">
+        <div>
+          <p className="eyebrow dark">COMPLETION LOG</p>
+          <h3 id="completion-title">{formatWorkoutDate(workoutDate)} 운동 완료</h3>
+          <p>운동을 마친 뒤 체크하면 주간 미니맵에도 DONE으로 표시됩니다.</p>
+        </div>
+        <button className="text-button" type="button" onClick={signOut}>
+          <LogOut size={14} aria-hidden="true" /> 로그아웃
+        </button>
+      </div>
+      <label className={`completion-check ${completed ? "checked" : ""}`}>
+        <input
+          type="checkbox"
+          checked={completed}
+          disabled={busy}
+          onChange={() => void toggleCompletion()}
+        />
+        <span className="completion-checkmark" aria-hidden="true">
+          {completed && <Check size={18} strokeWidth={3} />}
+        </span>
+        <span>
+          <strong>{busy ? "저장 중" : completed ? "운동 완료됨" : "운동을 완료했어요"}</strong>
+          <small>{completed ? "체크를 해제하면 완료 기록이 취소됩니다." : "체크하면 이 날짜의 완료 상태가 저장됩니다."}</small>
+        </span>
+      </label>
+      {message && <p className="form-message" role="status">{message}</p>}
+    </section>
+  );
+}
+
 function App() {
   const today = useMemo(getSeoulToday, []);
   const monday = useMemo(() => getMonday(today), [today]);
@@ -523,6 +658,7 @@ function App() {
   const [authNotice, setAuthNotice] = useState("");
   const [pushRecords, setPushRecords] = useState<WorkoutSession[]>([]);
   const [pullRecords, setPullRecords] = useState<WorkoutSession[]>([]);
+  const [completionRecords, setCompletionRecords] = useState<RoutineCompletion[]>([]);
   const todayId = getTodayRoutineId(today);
   const selectedRef = useRef<HTMLButtonElement>(null);
   const weekMapRef = useRef<HTMLDivElement>(null);
@@ -538,17 +674,43 @@ function App() {
     [pullRecords, pullTarget, pushRecords, pushTarget, week],
   );
   const selected = routines.find((routine) => routine.id === selectedId) ?? routines[0];
+  const selectedIndex = routines.findIndex((routine) => routine.id === selected.id);
+  const selectedDate = new Date(monday);
+  selectedDate.setDate(monday.getDate() + selectedIndex);
+  const selectedWorkoutDate = toDateInputValue(selectedDate);
+
+  function isRoutineCompleted(routine: Routine, workoutDate: string) {
+    if (routine.id === "thu") {
+      return pushRecords.some((record) => record.workout_date === workoutDate);
+    }
+    if (routine.id === "sat") {
+      return pullRecords.some((record) => record.workout_date === workoutDate);
+    }
+    return completionRecords.some(
+      (record) => record.workout_date === workoutDate && record.routine_id === routine.id,
+    );
+  }
 
   async function loadRecords() {
     if (!supabase) return;
-    const { data, error } = await supabase
-      .from("workout_sessions")
-      .select("id, workout_date, workout_type, target_total, total_reps, set_count, created_at")
-      .order("workout_date", { ascending: false });
-    if (!error) {
-      const records = (data ?? []) as WorkoutSession[];
+    const [sessionResult, completionResult] = await Promise.all([
+      supabase
+        .from("workout_sessions")
+        .select("id, workout_date, workout_type, target_total, total_reps, set_count, created_at")
+        .order("workout_date", { ascending: false }),
+      supabase
+        .from("routine_completions")
+        .select("id, workout_date, routine_id, completed_at")
+        .order("workout_date", { ascending: false }),
+    ]);
+
+    if (!sessionResult.error) {
+      const records = (sessionResult.data ?? []) as WorkoutSession[];
       setPushRecords(records.filter((record) => record.workout_type === "pushup"));
       setPullRecords(records.filter((record) => record.workout_type === "pullup"));
+    }
+    if (!completionResult.error) {
+      setCompletionRecords((completionResult.data ?? []) as RoutineCompletion[]);
     }
   }
 
@@ -560,6 +722,7 @@ function App() {
       if (!nextSession) {
         setPushRecords([]);
         setPullRecords([]);
+        setCompletionRecords([]);
       }
     });
     return () => listener.subscription.unsubscribe();
@@ -639,13 +802,15 @@ function App() {
             {routines.map((routine, index) => {
               const date = new Date(monday);
               date.setDate(monday.getDate() + index);
+              const workoutDate = toDateInputValue(date);
               const isToday = routine.id === todayId;
               const isSelected = routine.id === selectedId;
+              const isCompleted = isRoutineCompleted(routine, workoutDate);
 
               return (
                 <button
                   ref={isSelected ? selectedRef : undefined}
-                  className={`day-button ${routine.status} ${isSelected ? "selected" : ""}`}
+                  className={`day-button ${routine.status} ${isCompleted ? "done" : ""} ${isSelected ? "selected" : ""}`}
                   key={routine.id}
                   onClick={() => setSelectedId(routine.id)}
                   aria-pressed={isSelected}
@@ -656,7 +821,9 @@ function App() {
                   <strong>{date.getDate()}</strong>
                   <small>{routine.short}</small>
                   <span className="day-state">
-                    {isToday ? "TODAY" : routine.status === "done" ? <><Check size={12} /> DONE</> : routine.status === "ready" ? "FIXED" : "WAITING"}
+                    {isCompleted ? (
+                      <><Check size={12} /> {isToday ? "TODAY · DONE" : "DONE"}</>
+                    ) : isToday ? "TODAY" : routine.status === "ready" ? "FIXED" : "WAITING"}
                   </span>
                 </button>
               );
@@ -743,6 +910,15 @@ function App() {
                   defaultDate={getThisWeeksSaturday(today)}
                   initialMessage={authNotice}
                   onSaved={loadRecords}
+                />
+              )}
+              {selected.id !== "thu" && selected.id !== "sat" && (
+                <RoutineCompletionPanel
+                  routine={selected}
+                  workoutDate={selectedWorkoutDate}
+                  session={session}
+                  completed={isRoutineCompleted(selected, selectedWorkoutDate)}
+                  onChanged={loadRecords}
                 />
               )}
             </div>

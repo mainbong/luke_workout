@@ -23,3 +23,10 @@ export type WorkoutSession = {
   set_count: number | null;
   created_at: string;
 };
+
+export type RoutineCompletion = {
+  id: string;
+  workout_date: string;
+  routine_id: string;
+  completed_at: string;
+};
