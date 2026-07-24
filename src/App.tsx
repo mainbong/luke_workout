@@ -1,243 +1,276 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronRight, CircleAlert, Dumbbell, RotateCcw, TimerReset, X } from "lucide-react";
-import { days } from "./data";
+import { ArrowUpRight, CalendarDays, CheckCircle2, Dumbbell, Play, Route } from "lucide-react";
 
-type Mission = "pull" | "push";
-type MissionData = { reps: string[]; quality: boolean };
-type WeekData = { completed: Record<string, boolean>; pull: MissionData; push: MissionData };
-type AppState = {
-  week: number;
-  selectedDay: string;
-  pullTarget: number;
-  pushTarget: number;
-  weeks: Record<string, WeekData>;
+const START_DATE = new Date("2026-07-23T00:00:00+09:00");
+const TOTAL_DAYS = 90;
+
+type Workout = {
+  day: string;
+  date?: string;
+  type: string;
+  title: string;
+  description: string;
+  accent: "coral" | "yellow" | "blue" | "green";
+  record?: string;
+  exercises: {
+    name: string;
+    prescription: string;
+    note: string;
+  }[];
+  link?: {
+    label: string;
+    url: string;
+  };
 };
 
-const STORAGE_KEY = "luke-workout-v2";
-const defaultState: AppState = { week: 1, selectedDay: "mon", pullTarget: 24, pushTarget: 40, weeks: {} };
+const workouts: Workout[] = [
+  {
+    day: "THU",
+    date: "7.23",
+    type: "WEIGHT PUSH",
+    title: "푸쉬업 맥스",
+    description: "근력 운동처럼 세트마다 충분히 쉬고, 한 세트의 최대 반복을 밀어 올리는 날.",
+    accent: "coral",
+    record: "첫 기록 · 5세트 합계 83회",
+    exercises: [
+      {
+        name: "푸쉬업 맥스 세트",
+        prescription: "최대 5세트 · 세트 간 1분 30초",
+        note: "각 세트 실패 직전까지. 자세가 무너지면 그 세트는 종료.",
+      },
+      {
+        name: "이번 미션 총량",
+        prescription: "100회",
+        note: "성공하면 다음 푸쉬업 맥스 날 +10회, 실패하면 목표 유지.",
+      },
+    ],
+  },
+  {
+    day: "FRI",
+    type: "PUSH SKILL",
+    title: "푸쉬업 기술",
+    description: "다양한 푸쉬업을 빠르게 연결하며 자세와 움직임을 익히는 20분 기술 훈련.",
+    accent: "yellow",
+    exercises: [
+      {
+        name: "영상 가이드 루틴",
+        prescription: "20분 · 1회 따라하기",
+        note: "정우석 코치의 초보자 푸쉬업 루틴 순서를 그대로 진행.",
+      },
+      {
+        name: "동작 전환",
+        prescription: "동작 간 15초",
+        note: "반복 수 경쟁보다 손 위치·몸통 정렬·가슴의 이동 범위를 우선.",
+      },
+      {
+        name: "난이도 조절",
+        prescription: "필요할 때 무릎 대고 계속",
+        note: "동작 품질을 유지할 수 있는 형태로 즉시 낮춰 20분을 완주.",
+      },
+    ],
+    link: {
+      label: "초보자가 꼭 해야 할 푸쉬업 20분 루틴",
+      url: "https://www.youtube.com/watch?v=Di-lTiYsQeE",
+    },
+  },
+  {
+    day: "SAT",
+    type: "WEIGHT PULL",
+    title: "풀업 미션 + 러닝",
+    description: "토요일의 메인 등 운동. 보조 풀업을 웨이트 세트처럼 수행한 뒤 러닝머신으로 마무리.",
+    accent: "blue",
+    exercises: [
+      {
+        name: "보조 풀업 미션",
+        prescription: "보조 35kg · 목표 총 30회",
+        note: "최대 10세트. 세트 간 1분 30초.",
+      },
+      {
+        name: "미션 판정",
+        prescription: "총 30회 달성",
+        note: "성공하면 다음 풀업 날 +10회, 실패하면 목표 유지.",
+      },
+      {
+        name: "러닝머신",
+        prescription: "20분",
+        note: "걷기와 가벼운 달리기를 섞어 끝까지 유지 가능한 속도.",
+      },
+    ],
+  },
+  {
+    day: "SUN",
+    type: "MACHINE BACK",
+    title: "머신 등 + 러닝",
+    description: "토요일과 다른 자극. 실패 지점까지 가지 않고 머신으로 등 움직임을 반복 연습.",
+    accent: "green",
+    exercises: [
+      {
+        name: "랫풀다운",
+        prescription: "3세트 × 10~12회",
+        note: "가슴을 세우고 팔꿈치를 아래로 당기기. 2~3회 여유.",
+      },
+      {
+        name: "시티드 로우",
+        prescription: "3세트 × 10~12회",
+        note: "몸통을 흔들지 않고 견갑을 뒤로 모으기. 2~3회 여유.",
+      },
+      {
+        name: "리버스 펙덱 또는 페이스풀",
+        prescription: "2세트 × 12~15회",
+        note: "가벼운 무게로 어깨 뒤쪽과 등 상부에 집중.",
+      },
+      {
+        name: "러닝머신",
+        prescription: "20분",
+        note: "회복을 방해하지 않는 편안한 강도로 마무리.",
+      },
+    ],
+  },
+];
 
-const makeWeek = (): WeekData => ({
-  completed: {},
-  pull: { reps: Array(6).fill(""), quality: false },
-  push: { reps: Array(5).fill(""), quality: false },
-});
-
-function loadState(): AppState {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "");
-    return { ...defaultState, ...saved, weeks: saved?.weeks ?? {} };
-  } catch {
-    return structuredClone(defaultState);
-  }
+function getJourneyDay() {
+  const today = new Date();
+  const elapsed = Math.floor((today.getTime() - START_DATE.getTime()) / 86_400_000) + 1;
+  return Math.min(TOTAL_DAYS, Math.max(1, elapsed));
 }
 
 function App() {
-  const [state, setState] = useState<AppState>(loadState);
-  const [seconds, setSeconds] = useState<number | null>(null);
-  const timerRef = useRef<number | null>(null);
-  const currentWeek = state.weeks[String(state.week)] ?? makeWeek();
-  const selectedDay = days.find((day) => day.id === state.selectedDay) ?? days[0];
-  const completedCount = Object.values(currentWeek.completed).filter(Boolean).length;
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [state]);
-
-  const updateWeek = useCallback((updater: (week: WeekData) => WeekData) => {
-    setState((previous) => {
-      const key = String(previous.week);
-      return { ...previous, weeks: { ...previous.weeks, [key]: updater(previous.weeks[key] ?? makeWeek()) } };
-    });
-  }, []);
-
-  const startTimer = () => {
-    if (timerRef.current) window.clearInterval(timerRef.current);
-    setSeconds(90);
-    timerRef.current = window.setInterval(() => {
-      setSeconds((value) => {
-        if (value === null || value <= 1) {
-          if (timerRef.current) window.clearInterval(timerRef.current);
-          timerRef.current = null;
-          return 0;
-        }
-        return value - 1;
-      });
-    }, 1000);
-  };
-
-  const stopTimer = () => {
-    if (timerRef.current) window.clearInterval(timerRef.current);
-    timerRef.current = null;
-    setSeconds(null);
-  };
-
-  const selectDay = (id: string) => {
-    setState((previous) => ({ ...previous, selectedDay: id }));
-    requestAnimationFrame(() => document.querySelector("#today-detail")?.scrollIntoView({ behavior: "smooth" }));
-  };
-
-  const reset = () => {
-    if (!window.confirm("4주 완료 기록과 세트별 횟수를 모두 지울까요? 이 작업은 되돌릴 수 없습니다.")) return;
-    localStorage.removeItem(STORAGE_KEY);
-    setState(structuredClone(defaultState));
-  };
+  const journeyDay = getJourneyDay();
 
   return (
     <>
-      <a className="skip-link" href="#calendar">주간 계획으로 건너뛰기</a>
+      <a className="skip-link" href="#routine">이번 주 루틴으로 건너뛰기</a>
+
       <header className="hero" id="top">
         <nav className="topbar" aria-label="주요 메뉴">
-          <a className="brand" href="#top" aria-label="LUKE 운동 미션 홈">
-            <span className="brand-mark" aria-hidden="true"><Dumbbell size={18} /></span>
-            <span>LUKE / MISSION 01</span>
+          <a className="brand" href="#top" aria-label="루크 90일 미션 홈">
+            <span className="brand-mark"><Dumbbell size={18} aria-hidden="true" /></span>
+            <span>LUKE / 90 DAYS</span>
           </a>
-          <div className="nav-links">
-            <a href="#calendar">이번 주</a><a href="#missions">미션 규칙</a><a href="#month">4주 진행</a>
-          </div>
+          <span className="top-date">2026.07.23 — 10.20</span>
         </nav>
-        <div className="hero-grid">
-          <div className="hero-copy">
-            <p className="eyebrow">BEGINNER STRENGTH PROGRAM · 4 WEEKS</p>
-            <h1>세게보다<br /><span>꾸준하게.</span></h1>
-            <p className="hero-lead">수·토·일 헬스장의 목적을 나누고 집 운동과 회복을 연결한 1개월 반복 프로그램입니다.</p>
-            <div className="hero-actions">
-              <a className="button button-primary" href="#today-detail">오늘 루틴 보기</a>
-              <button className="button button-quiet" onClick={startTimer} type="button"><TimerReset size={18} /> 90초 휴식</button>
-            </div>
+
+        <div className="hero-main">
+          <div>
+            <p className="eyebrow">13-WEEK TRAINING JOURNEY</p>
+            <h1>꾸준히<br /><span>90일.</span></h1>
+            <p className="hero-copy">
+              2026년 7월 23일 목요일에 시작한 90일 운동 미션.
+              목·금은 푸쉬업, 토·일은 등 운동을 서로 다른 방식으로 반복합니다.
+            </p>
           </div>
-          <aside className="mission-board" aria-label="이번 회차 요약">
-            <div className="board-top">
-              <div><p className="micro-label">CURRENT CYCLE</p><p className="cycle-title">WEEK {state.week} / 4</p></div>
-              <label className="week-select-label">기록 주차
-                <select value={state.week} onChange={(event) => setState((old) => ({ ...old, week: Number(event.target.value) }))}>
-                  {[1, 2, 3, 4].map((week) => <option key={week} value={week}>{week}주차</option>)}
-                </select>
-              </label>
+
+          <aside className="journey-card" aria-label="90일 미션 현황">
+            <div className="journey-number">
+              <span>DAY</span>
+              <strong>{String(journeyDay).padStart(2, "0")}</strong>
+              <small>/ 90</small>
             </div>
-            <div className="progress-track" aria-hidden="true"><span style={{ width: `${completedCount / 7 * 100}%` }} /></div>
-            <p className="progress-copy"><strong>{completedCount} / 7 완료</strong><span>완료 체크는 이 기기에 저장됩니다.</span></p>
-            <div className="target-row">
-              <div><span>풀업 목표</span><strong>{state.pullTarget}회</strong></div>
-              <div><span>푸쉬업 목표</span><strong>{state.pushTarget}회</strong></div>
+            <div className="journey-progress" aria-hidden="true">
+              <span style={{ width: `${(journeyDay / TOTAL_DAYS) * 100}%` }} />
             </div>
+            <div className="goal-pair">
+              <div>
+                <span>풀업 1세트</span>
+                <strong>15회</strong>
+              </div>
+              <div>
+                <span>푸쉬업 1세트</span>
+                <strong>60회</strong>
+              </div>
+            </div>
+            <p><CalendarDays size={15} aria-hidden="true" /> 13주 동안 같은 주간 구조를 반복</p>
           </aside>
         </div>
       </header>
 
       <main>
-        <section className="principles" aria-labelledby="principles-title">
-          <div className="section-intro"><p className="eyebrow dark">THE PLAN</p><h2 id="principles-title">강한 날은 선명하게,<br />가벼운 날은 확실하게.</h2></div>
-          <div className="principle-list">
-            {[
-              ["01", "품질 반복 우선", "모든 근력 동작은 폼이 무너지기 전, 보통 2회 여유(RIR 2)에서 멈춥니다."],
-              ["02", "등 운동 강약 분리", "수요일은 주 운동, 토요일은 전신 볼륨, 일요일은 기술과 회복입니다."],
-              ["03", "조금씩 증가", "한 번의 기록보다 두 번 연속 편안한 성공을 더 중요하게 봅니다."],
-            ].map(([number, title, copy]) => <article key={number}><span>{number}</span><div><h3>{title}</h3><p>{copy}</p></div></article>)}
+        <section className="start-record" aria-label="미션 시작 기록">
+          <div className="record-icon"><CheckCircle2 aria-hidden="true" /></div>
+          <div>
+            <span>MISSION START · THU 07.23</span>
+            <h2>첫 푸쉬업 기록, 83회</h2>
+            <p>5세트 · 세트 간 1분 30초 · 합계 83회 완료</p>
           </div>
         </section>
 
-        <section id="calendar" className="calendar-section" aria-labelledby="calendar-title">
-          <div className="section-heading-row"><div><p className="eyebrow dark">WEEKLY CALENDAR</p><h2 id="calendar-title">월요일부터 일요일까지</h2></div><p className="section-note">요일을 선택하면 아래에 상세 루틴이 열립니다.</p></div>
-          <div className="calendar-grid" aria-label="요일별 운동 계획">
-            {days.map((day) => (
-              <button key={day.id} className={`day-card ${currentWeek.completed[day.id] ? "completed" : ""}`} data-level={day.level} aria-current={selectedDay.id === day.id} onClick={() => selectDay(day.id)}>
-                <span className="day-top"><span>{day.short}</span>{currentWeek.completed[day.id] && <Check className="day-check" aria-label="완료" />}</span>
-                <span><h3>{day.title}</h3><p>{day.summary}</p></span>
-                <span className="day-tag">{day.tag}</span>
-              </button>
-            ))}
+        <section id="routine" className="routine-section" aria-labelledby="routine-title">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow dark">WEEKLY ROUTINE</p>
+              <h2 id="routine-title">매주 목요일부터<br />일요일까지.</h2>
+            </div>
+            <p>월·화·수는 별도 미션 없이 회복합니다.</p>
           </div>
-        </section>
 
-        <section id="today-detail" className="detail-section" aria-live="polite">
-          <div className="detail-heading">
-            <div><p className="eyebrow light">{selectedDay.short} / {selectedDay.tag}</p><h2>{selectedDay.ko} · {selectedDay.title}</h2><p>{selectedDay.summary}</p></div>
-            <label className="complete-toggle">
-              <input type="checkbox" checked={Boolean(currentWeek.completed[selectedDay.id])} onChange={(event) => updateWeek((week) => ({ ...week, completed: { ...week.completed, [selectedDay.id]: event.target.checked } }))} />
-              <span aria-hidden="true" /> 오늘 운동 완료
-            </label>
-          </div>
-          <div className="exercise-list">
-            {selectedDay.exercises.map(([name, volume, rest, effort], index) => (
-              <article className="exercise-row" key={name}>
-                <span className="exercise-number">{String(index + 1).padStart(2, "0")}</span>
-                <div className="exercise-name"><h3>{name}</h3></div>
-                <div className="exercise-cell"><span>SETS × REPS</span><p>{volume}</p></div>
-                <div className="exercise-cell"><span>REST</span><p>{rest}</p></div>
-                <div className="exercise-cell"><span>STOP RULE</span><p>{effort}</p></div>
+          <div className="workout-list">
+            {workouts.map((workout, index) => (
+              <article className={`workout-card ${workout.accent}`} key={workout.day}>
+                <div className="workout-day">
+                  <span>{workout.date ?? String(index + 1).padStart(2, "0")}</span>
+                  <strong>{workout.day}</strong>
+                </div>
+
+                <div className="workout-body">
+                  <p className="workout-type">{workout.type}</p>
+                  <h3>{workout.title}</h3>
+                  <p className="workout-description">{workout.description}</p>
+
+                  {workout.record && (
+                    <div className="record-chip"><CheckCircle2 size={17} aria-hidden="true" /> {workout.record}</div>
+                  )}
+
+                  <div className="exercise-table">
+                    {workout.exercises.map((exercise) => (
+                      <div className="exercise-item" key={exercise.name}>
+                        <div><strong>{exercise.name}</strong><span>{exercise.note}</span></div>
+                        <b>{exercise.prescription}</b>
+                      </div>
+                    ))}
+                  </div>
+
+                  {workout.link && (
+                    <a className="video-link" href={workout.link.url} target="_blank" rel="noreferrer">
+                      <span className="play-mark"><Play size={18} fill="currentColor" aria-hidden="true" /></span>
+                      <span><small>YOUTUBE GUIDE</small>{workout.link.label}</span>
+                      <ArrowUpRight aria-hidden="true" />
+                    </a>
+                  )}
+                </div>
               </article>
             ))}
           </div>
-          <div className="detail-footer"><p><strong>RIR</strong> = 몇 회 더 할 수 있는지 남은 횟수. RIR 2는 2회 여유입니다.</p><button className="text-button" onClick={startTimer}>90초 휴식 시작 <ChevronRight size={16} /></button></div>
         </section>
 
-        <section id="missions" className="missions-section" aria-labelledby="missions-title">
-          <div className="section-intro"><p className="eyebrow dark">PROGRESSION RULES</p><h2 id="missions-title">기록은 숫자로,<br />성공은 좋은 폼으로.</h2><p>기존 풀업 30회·푸쉬업 100회 목표를 현재 수행 수준에 맞춰 낮췄습니다. 다음 주에도 반복 가능한 성공을 만듭니다.</p></div>
-          <div className="mission-cards">
-            <MissionCard mission="pull" target={state.pullTarget} data={currentWeek.pull} onChange={(data) => updateWeek((week) => ({ ...week, pull: data }))} />
-            <MissionCard mission="push" target={state.pushTarget} data={currentWeek.push} onChange={(data) => updateWeek((week) => ({ ...week, push: data }))} />
+        <section className="finish-line" aria-labelledby="finish-title">
+          <Route size={42} aria-hidden="true" />
+          <div>
+            <p className="eyebrow">FINISH LINE · 2026.10.20</p>
+            <h2 id="finish-title">13주 뒤, 한 세트의 기준을 바꾼다.</h2>
+          </div>
+          <div className="finish-goals">
+            <span>풀업 <strong>15</strong></span>
+            <span>푸쉬업 <strong>60</strong></span>
           </div>
         </section>
 
-        <section id="month" className="month-section" aria-labelledby="month-title">
-          <div className="section-heading-row"><div><p className="eyebrow light">THE FIRST MONTH</p><h2 id="month-title">4주를 한 사이클로</h2></div><p className="section-note light-note">매주 같은 틀, 컨디션에 맞는 작은 변화.</p></div>
-          <ol className="month-grid">
-            {[
-              ["01", "기준 만들기", "무게를 늘리지 않고 동작 범위·편한 보조량·실제 반복을 기록합니다."],
-              ["02", "품질 반복", "RIR와 자세가 유지될 때만 미션 목표를 올립니다."],
-              ["03", "작게 전진", "상한 반복을 2회 연속 달성한 동작만 가장 작은 단위로 증량합니다."],
-              ["04", "회복 확인", "피로가 쌓이면 각 동작 1세트씩 줄이고 다음 사이클을 준비합니다."],
-            ].map(([number, title, copy]) => <li key={number}><span>{number}</span><h3>{title}</h3><p>{copy}</p></li>)}
-          </ol>
-          <div className="reset-row"><p>기록은 브라우저 localStorage에만 저장되며 다른 기기와 동기화되지 않습니다. 브라우저 데이터를 지우면 함께 사라집니다.</p><button className="danger-button" onClick={reset}><RotateCcw size={16} /> 모든 기록 초기화</button></div>
+        <section className="notes" aria-label="안전 및 출처">
+          <p>
+            예리한 통증·흉통·어지럼증이 있으면 즉시 중단합니다.
+            이 루틴은 개인 운동 계획이며 의료 진단이나 치료를 대신하지 않습니다.
+          </p>
+          <div className="source-links">
+            <a href="https://www.youtube.com/watch?v=Di-lTiYsQeE" target="_blank" rel="noreferrer">금요일 푸쉬업 영상</a>
+            <a href="https://acsm.org/resistance-training-guidelines-update-2026/" target="_blank" rel="noreferrer">ACSM 저항운동 참고</a>
+          </div>
         </section>
-
-        <section className="safety-section" aria-labelledby="safety-title">
-          <div className="safety-mark" aria-hidden="true"><CircleAlert /></div><div><h2 id="safety-title">몸이 보내는 신호가 우선입니다.</h2><p>예리하거나 갑작스러운 통증, 흉통, 심한 호흡곤란, 어지럼증이 생기면 즉시 중단하세요. 증상이 지속되거나 기존 질환·부상이 있다면 의료 전문가와 상의하세요. 이 프로그램은 일반 운동 정보이며 진단이나 치료를 대신하지 않습니다.</p></div>
-        </section>
-
-        <Sources />
       </main>
 
-      {seconds !== null && <div className="timer" role="status" aria-live="polite"><div><span>REST TIMER</span><strong>{seconds === 0 ? "시작!" : `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`}</strong></div><button onClick={stopTimer} aria-label="휴식 타이머 닫기"><X size={17} /> 닫기</button></div>}
-      <footer><p>LUKE / FOUR-WEEK MISSION</p><p>잘하는 것보다, 다시 할 수 있게.</p></footer>
+      <footer>
+        <p>LUKE / 90 DAYS</p>
+        <p>2026.07.23 — 2026.10.20</p>
+      </footer>
     </>
   );
-}
-
-function MissionCard({ mission, target, data, onChange }: { mission: Mission; target: number; data: MissionData; onChange: (data: MissionData) => void }) {
-  const config = mission === "pull"
-    ? { label: "풀업", micro: "WEDNESDAY / ASSISTED", description: "보조 35kg에서 최대 6세트. 매 세트 RIR 2 또는 턱이 바를 넘지 못하기 직전에 종료하고 90초 쉽니다.", increment: 3, quality: "모든 반복에서 반동 없이 어깨를 안정적으로 유지함", details: "목표와 폼 기준을 모두 충족하면 다음 풀업 날 +3회, 실패하면 유지합니다. 36회에 도달해 2회 연속 성공한 뒤에만 보조를 2.5~5kg 줄이고 목표를 24회로 되돌립니다." }
-    : { label: "푸쉬업", micro: "TUESDAY / HOME", description: "최대 5세트. 8~15회가 가능한 인클라인 또는 무릎 푸쉬업을 선택하고, 폼이 흐트러지기 2회 전에 멈춘 뒤 90초 쉽니다.", increment: 5, quality: "몸통이 일직선이고 가슴 높이와 손 위치를 끝까지 유지함", details: "목표와 폼 기준을 모두 충족하면 +5회, 실패하면 유지합니다. 8회 미만이면 인클라인을 높이고, 15회를 계속 넘으면 낮춥니다. 60회를 2회 연속 성공하면 한 단계 어려운 변형으로 바꾸고 40회부터 다시 시작합니다. 100회는 지금의 1차 목표로 사용하지 않습니다." };
-  const total = useMemo(() => data.reps.reduce((sum, value) => sum + (Number(value) || 0), 0), [data.reps]);
-  const hasRecord = data.reps.some((value) => value !== "");
-  const success = hasRecord && total >= target && data.quality;
-  const status = !hasRecord ? "기록 전" : success ? "성공" : data.quality ? "목표 미달" : "폼 확인 필요";
-  const nextCopy = !hasRecord ? "다음 목표는 결과를 입력하면 계산됩니다." : success ? `성공! 다음 ${config.label} 날 목표는 ${target + config.increment}회입니다.` : `이번 목표는 유지합니다. 다음 ${config.label} 날도 ${target}회입니다.`;
-
-  return (
-    <article className={`mission-card ${mission}-card`}>
-      <div className="mission-card-head"><div><p className="micro-label">{config.micro}</p><h3>{config.label} 미션</h3></div><div className="target-badge"><span>{target}</span><small>회 목표</small></div></div>
-      <p>{config.description}</p>
-      <div className="set-entry" aria-label={`${config.label} 세트별 실제 횟수`}>
-        {data.reps.map((value, index) => <label className="rep-input" key={index}>{index + 1}세트<input type="number" min="0" max="99" inputMode="numeric" value={value} onChange={(event) => onChange({ ...data, reps: data.reps.map((rep, i) => i === index ? event.target.value : rep) })} aria-label={`${config.label} ${index + 1}세트 실제 횟수`} /></label>)}
-      </div>
-      <div className="mission-result"><span>합계 <strong>{total}</strong>회</span><span className={`status-pill ${hasRecord ? success ? "success" : "fail" : ""}`}>{status}</span></div>
-      <label className="quality-check"><input type="checkbox" checked={data.quality} onChange={(event) => onChange({ ...data, quality: event.target.checked })} />{config.quality}</label>
-      <p className="next-target">{nextCopy}</p>
-      <details><summary>{mission === "pull" ? "증가 규칙" : "난이도·증가 규칙"}</summary><p>{config.details}</p></details>
-    </article>
-  );
-}
-
-function Sources() {
-  const sources = [
-    ["ACSM, 2026 저항운동 지침", "https://acsm.org/resistance-training-guidelines-update-2026/", "꾸준함, 전신 주 2회 이상, 점진적 증가, 실패 지점 훈련의 비필수성."],
-    ["ACSM Position Stand 요약", "https://www.acsm.org/wp-content/uploads/2026/03/Resistance-Training-Position-Stand-infographic.pdf", "맨몸·기구·밴드 모두 효과적이며 목표와 일정에 맞춘 단순한 계획 권장."],
-    ["미국 보건복지부 신체활동 지침", "https://odphp.health.gov/our-work/nutrition-physical-activity/physical-activity-guidelines/current-guidelines", "주요 근육군 강화 주 2일 이상, 적은 활동부터 시작해 점진적으로 증가."],
-    ["CDC 성인 신체활동 안내", "https://www.cdc.gov/physical-activity-basics/adding-adults/index.html", "능력에 맞는 활동 선택, 활동 분산, 기존 질환이 있다면 전문가 상담."],
-  ];
-  return <section className="sources-section" aria-labelledby="sources-title"><div><p className="eyebrow dark">SOURCES</p><h2 id="sources-title">설계 근거</h2></div><ol>{sources.map(([label, url, copy]) => <li key={url}><a href={url} target="_blank" rel="noreferrer">{label}</a><span>{copy}</span></li>)}</ol></section>;
 }
 
 export default App;
