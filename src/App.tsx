@@ -40,12 +40,11 @@ function getSeoulToday() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
 }
 
-function getMonday(date: Date) {
-  const monday = new Date(date);
-  const day = date.getDay();
-  monday.setDate(date.getDate() - (day === 0 ? 6 : day - 1));
-  monday.setHours(0, 0, 0, 0);
-  return monday;
+function addDays(date: Date, amount: number) {
+  const next = new Date(date);
+  next.setDate(date.getDate() + amount);
+  next.setHours(0, 0, 0, 0);
+  return next;
 }
 
 function getTodayRoutineId(date: Date) {
@@ -59,18 +58,15 @@ function toDateInputValue(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function getThisWeeksThursday(today: Date) {
-  const monday = getMonday(today);
-  const thursday = new Date(monday);
-  thursday.setDate(monday.getDate() + 3);
-  return toDateInputValue(thursday < START_DATE ? START_DATE : thursday);
+function getJourneyDay(date: Date) {
+  return Math.min(
+    TOTAL_DAYS,
+    Math.max(1, Math.floor((date.getTime() - START_DATE.getTime()) / 86_400_000) + 1),
+  );
 }
 
-function getThisWeeksSaturday(today: Date) {
-  const monday = getMonday(today);
-  const saturday = new Date(monday);
-  saturday.setDate(monday.getDate() + 5);
-  return toDateInputValue(saturday);
+function getJourneyWeek(date: Date) {
+  return Math.min(13, Math.max(1, Math.floor((getJourneyDay(date) - 1) / 7) + 1));
 }
 
 function formatWorkoutDate(value: string) {
@@ -652,7 +648,6 @@ function RoutineCompletionPanel({
 
 function App() {
   const today = useMemo(getSeoulToday, []);
-  const monday = useMemo(() => getMonday(today), [today]);
   const [selectedId, setSelectedId] = useState(() => getTodayRoutineId(today));
   const [session, setSession] = useState<Session | null>(null);
   const [authNotice, setAuthNotice] = useState("");
@@ -662,22 +657,35 @@ function App() {
   const todayId = getTodayRoutineId(today);
   const selectedRef = useRef<HTMLButtonElement>(null);
   const weekMapRef = useRef<HTMLDivElement>(null);
-  const journeyDay = Math.min(
-    TOTAL_DAYS,
-    Math.max(1, Math.floor((today.getTime() - START_DATE.getTime()) / 86_400_000) + 1),
-  );
-  const week = Math.min(13, Math.max(1, Math.floor((journeyDay - 1) / 7) + 1));
+  const journeyDay = getJourneyDay(today);
+  const week = getJourneyWeek(today);
   const pushTarget = nextPushTarget(pushRecords);
   const pullTarget = nextPullTarget(pullRecords);
-  const routines = useMemo(
-    () => buildRoutines(pushTarget, pullTarget, week, pushRecords[0], pullRecords[0]),
-    [pullRecords, pullTarget, pushRecords, pushTarget, week],
+  const visibleDays = useMemo(
+    () => Array.from({ length: 7 }, (_, index) => {
+      const date = addDays(today, index - 3);
+      const workoutDate = toDateInputValue(date);
+      const routineId = getTodayRoutineId(date);
+      const pushRecord = pushRecords.find((record) => record.workout_date === workoutDate);
+      const pullRecord = pullRecords.find((record) => record.workout_date === workoutDate);
+      const datePushTarget = pushRecord?.target_total ?? pushTarget;
+      const datePullTarget = pullRecord?.target_total ?? pullTarget;
+      const routine = buildRoutines(
+        datePushTarget,
+        datePullTarget,
+        getJourneyWeek(date),
+        pushRecord,
+        pullRecord,
+      ).find((item) => item.id === routineId);
+
+      if (!routine) throw new Error(`Missing routine for ${routineId}`);
+      return { date, workoutDate, routine };
+    }),
+    [pullRecords, pullTarget, pushRecords, pushTarget, today],
   );
-  const selected = routines.find((routine) => routine.id === selectedId) ?? routines[0];
-  const selectedIndex = routines.findIndex((routine) => routine.id === selected.id);
-  const selectedDate = new Date(monday);
-  selectedDate.setDate(monday.getDate() + selectedIndex);
-  const selectedWorkoutDate = toDateInputValue(selectedDate);
+  const selectedDay = visibleDays.find(({ routine }) => routine.id === selectedId) ?? visibleDays[3];
+  const selected = selectedDay.routine;
+  const selectedWorkoutDate = selectedDay.workoutDate;
 
   function isRoutineCompleted(routine: Routine, workoutDate: string) {
     if (routine.id === "thu") {
@@ -792,17 +800,14 @@ function App() {
         <section className="week-section" aria-labelledby="week-title">
           <div className="week-heading">
             <div>
-              <p className="eyebrow dark">THIS WEEK</p>
-              <h2 id="week-title">한 주 미니맵</h2>
+              <p className="eyebrow dark">7-DAY WINDOW</p>
+              <h2 id="week-title">오늘 전후 7일</h2>
             </div>
-            <p>요일을 누르면 아래 운동이 바뀝니다.</p>
+            <p>과거 3일 · 오늘 · 미래 3일</p>
           </div>
 
-          <div ref={weekMapRef} className="week-map" id="weekly-map" aria-label="월요일부터 일요일 운동 선택">
-            {routines.map((routine, index) => {
-              const date = new Date(monday);
-              date.setDate(monday.getDate() + index);
-              const workoutDate = toDateInputValue(date);
+          <div ref={weekMapRef} className="week-map" id="weekly-map" aria-label="오늘 전후 7일 운동 선택">
+            {visibleDays.map(({ date, workoutDate, routine }) => {
               const isToday = routine.id === todayId;
               const isSelected = routine.id === selectedId;
               const isCompleted = isRoutineCompleted(routine, workoutDate);
@@ -811,7 +816,7 @@ function App() {
                 <button
                   ref={isSelected ? selectedRef : undefined}
                   className={`day-button ${routine.status} ${isCompleted ? "done" : ""} ${isSelected ? "selected" : ""}`}
-                  key={routine.id}
+                  key={workoutDate}
                   onClick={() => setSelectedId(routine.id)}
                   aria-pressed={isSelected}
                   aria-label={`${routine.ko} ${date.getMonth() + 1}월 ${date.getDate()}일, ${routine.short}${isToday ? ", 오늘" : ""}`}
@@ -896,7 +901,7 @@ function App() {
                   session={session}
                   records={pushRecords}
                   currentTarget={pushTarget}
-                  defaultDate={getThisWeeksThursday(today)}
+                  defaultDate={selectedWorkoutDate}
                   initialMessage={authNotice}
                   onSaved={loadRecords}
                 />
@@ -907,7 +912,7 @@ function App() {
                   session={session}
                   records={pullRecords}
                   currentTarget={pullTarget}
-                  defaultDate={getThisWeeksSaturday(today)}
+                  defaultDate={selectedWorkoutDate}
                   initialMessage={authNotice}
                   onSaved={loadRecords}
                 />
