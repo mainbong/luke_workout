@@ -30,3 +30,15 @@ export type RoutineCompletion = {
   routine_id: string;
   completed_at: string;
 };
+
+export type AdminDailyRecord = {
+  user_id: string;
+  user_email: string;
+  record_kind: "workout_session" | "routine_completion";
+  routine_id: string | null;
+  workout_type: "pushup" | "pullup" | null;
+  target_total: number | null;
+  total_reps: number | null;
+  set_count: number | null;
+  recorded_at: string;
+};

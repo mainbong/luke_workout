@@ -370,6 +370,95 @@ main { max-width: 1500px; margin: auto; }
 }
 .rule-preview strong { color: var(--ink); }
 .form-message { margin: 10px 0 0; color: #742610; font-size: 12px; font-weight: 800; }
+.admin-panel {
+  margin-top: 26px;
+  padding: 22px;
+  color: white;
+  background: var(--deep);
+  border: 1px solid var(--deep);
+}
+.empty-routine .admin-panel { width: 100%; }
+.admin-heading,
+.admin-title,
+.admin-summary,
+.admin-result {
+  display: flex;
+  align-items: center;
+}
+.admin-heading { justify-content: space-between; gap: 18px; }
+.admin-title { gap: 11px; }
+.admin-actions { display: flex; gap: 7px; }
+.admin-title .eyebrow { margin-bottom: 2px; color: var(--lime); }
+.admin-title h3 { margin: 0; color: white; font-size: 20px; letter-spacing: -.035em; }
+.admin-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: var(--deep);
+  background: var(--lime);
+  border-radius: 50%;
+}
+.admin-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  color: white;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,.36);
+  font-size: 10px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.admin-refresh:disabled { cursor: wait; opacity: .58; }
+.admin-summary {
+  gap: 9px;
+  margin-top: 18px;
+  padding: 12px 14px;
+  color: var(--deep);
+  background: var(--lime);
+}
+.admin-summary > span { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 900; }
+.admin-summary strong { font-size: 18px; }
+.admin-summary small { margin-left: auto; font-size: 10px; font-weight: 800; }
+.admin-empty {
+  display: grid;
+  gap: 3px;
+  margin-top: 12px;
+  padding: 16px;
+  color: rgba(255,255,255,.8);
+  border: 1px dashed rgba(255,255,255,.3);
+}
+.admin-empty strong { color: white; font-size: 13px; }
+.admin-empty span { font-size: 11px; }
+.admin-records { display: grid; gap: 8px; margin-top: 12px; }
+.admin-records article {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.25fr);
+  gap: 18px;
+  align-items: center;
+  padding: 14px;
+  color: var(--ink);
+  background: var(--paper);
+}
+.admin-user { display: grid; gap: 2px; min-width: 0; }
+.admin-user span { overflow-wrap: anywhere; font-size: 12px; font-weight: 900; }
+.admin-user small { color: var(--muted); font-size: 10px; }
+.admin-result { justify-content: flex-end; gap: 10px; }
+.admin-result > span { color: var(--muted); font-size: 10px; font-weight: 900; }
+.admin-result strong { font-size: 13px; }
+.admin-result em {
+  padding: 4px 7px;
+  color: white;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.admin-result em.success { background: var(--navy); }
+.admin-result em.keep { color: var(--deep); background: var(--blue); }
+.admin-note { margin: 12px 0 0; color: rgba(255,255,255,.55); font-size: 9px; }
 .auth-alert {
   position: relative;
   display: flex;
@@ -452,6 +541,15 @@ footer {
   .result-form { grid-template-columns: 1fr; }
   .auth-alert { align-items: flex-start; flex-direction: column; gap: 2px; }
   .rule-preview { align-items: flex-start; flex-wrap: wrap; }
+  .admin-panel { margin-right: -2px; margin-left: -2px; padding: 17px; }
+  .admin-heading { align-items: flex-start; }
+  .admin-actions { align-items: stretch; flex-direction: column; }
+  .admin-refresh { padding: 7px; }
+  .admin-refresh svg { flex: 0 0 auto; }
+  .admin-summary { align-items: flex-start; flex-wrap: wrap; }
+  .admin-summary small { width: 100%; margin-left: 0; }
+  .admin-records article { grid-template-columns: 1fr; gap: 11px; }
+  .admin-result { align-items: flex-start; justify-content: flex-start; flex-wrap: wrap; }
   .safety { margin-right: 18px; margin-left: 18px; }
   footer { flex-direction: column; gap: 6px; }
 }

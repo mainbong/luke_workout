@@ -1,9 +1,21 @@
 import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { ArrowUpRight, Check, Dumbbell, LogIn, LogOut, Play, Save } from "lucide-react";
+import {
+  ArrowUpRight,
+  Check,
+  Dumbbell,
+  LogIn,
+  LogOut,
+  Play,
+  RefreshCw,
+  Save,
+  ShieldCheck,
+  Users,
+} from "lucide-react";
 import {
   isSupabaseConfigured,
   supabase,
+  type AdminDailyRecord,
   type RoutineCompletion,
   type WorkoutSession,
 } from "./supabase";
@@ -13,6 +25,7 @@ const END_DATE = "2026-10-20";
 const TOTAL_DAYS = 90;
 const PUSH_START_TARGET = 100;
 const PULL_START_TARGET = 30;
+const ADMIN_EMAIL = "mainbbong@gmail.com";
 
 type Exercise = {
   name: string;
@@ -72,6 +85,14 @@ function getJourneyWeek(date: Date) {
 function formatWorkoutDate(value: string) {
   const [, month, day] = value.split("-").map(Number);
   return `${month}월 ${day}일`;
+}
+
+function formatRecordedAt(value: string) {
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
 function nextPushTarget(records: WorkoutSession[]) {
@@ -646,6 +667,129 @@ function RoutineCompletionPanel({
   );
 }
 
+function AdminDailyPanel({
+  workoutDate,
+  routine,
+  refreshToken,
+}: {
+  workoutDate: string;
+  routine: Routine;
+  refreshToken: number;
+}) {
+  const [records, setRecords] = useState<AdminDailyRecord[]>([]);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function loadAdminRecords() {
+    if (!supabase) return;
+    setBusy(true);
+    setMessage("");
+
+    const { data, error } = await supabase.rpc("get_admin_daily_records", {
+      target_date: workoutDate,
+    });
+
+    if (error) {
+      setRecords([]);
+      setMessage(`관리자 기록을 불러오지 못했습니다: ${error.message}`);
+    } else {
+      setRecords((data ?? []) as AdminDailyRecord[]);
+    }
+    setBusy(false);
+  }
+
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+  }
+
+  useEffect(() => {
+    void loadAdminRecords();
+  }, [workoutDate, refreshToken]);
+
+  return (
+    <section className="admin-panel" aria-labelledby="admin-panel-title">
+      <div className="admin-heading">
+        <div className="admin-title">
+          <span className="admin-icon"><ShieldCheck size={18} aria-hidden="true" /></span>
+          <div>
+            <p className="eyebrow dark">ADMIN ONLY</p>
+            <h3 id="admin-panel-title">{formatWorkoutDate(workoutDate)} 참여 기록</h3>
+          </div>
+        </div>
+        <div className="admin-actions">
+          <button type="button" className="admin-refresh" onClick={() => void loadAdminRecords()} disabled={busy}>
+            <RefreshCw size={14} aria-hidden="true" />
+            {busy ? "확인 중" : "새로고침"}
+          </button>
+          <button type="button" className="admin-refresh" onClick={() => void signOut()}>
+            <LogOut size={14} aria-hidden="true" />
+            로그아웃
+          </button>
+        </div>
+      </div>
+
+      <div className="admin-summary">
+        <span><Users size={15} aria-hidden="true" /> 기록 사용자</span>
+        <strong>{new Set(records.map((record) => record.user_id)).size}명</strong>
+        <small>{routine.ko} · {routine.short}</small>
+      </div>
+
+      {message && <p className="form-message" role="alert">{message}</p>}
+
+      {!busy && !message && records.length === 0 && (
+        <div className="admin-empty">
+          <strong>아직 저장된 기록이 없습니다.</strong>
+          <span>이 날짜에 사용자가 완료 체크나 결과 저장을 하면 여기에 표시됩니다.</span>
+        </div>
+      )}
+
+      {records.length > 0 && (
+        <div className="admin-records" aria-label={`${formatWorkoutDate(workoutDate)} 사용자 기록`}>
+          {records.map((record) => {
+            const isWorkout = record.record_kind === "workout_session";
+            const succeeded = record.workout_type === "pullup"
+              ? record.set_count !== null && record.set_count <= 10
+              : record.total_reps !== null
+                && record.target_total !== null
+                && record.total_reps >= record.target_total;
+
+            return (
+              <article key={`${record.record_kind}-${record.user_id}-${record.recorded_at}`}>
+                <div className="admin-user">
+                  <span>{record.user_email}</span>
+                  <small>{formatRecordedAt(record.recorded_at)} 기록</small>
+                </div>
+                {isWorkout ? (
+                  <div className="admin-result">
+                    <span>{record.workout_type === "pullup" ? "풀업" : "푸쉬업"}</span>
+                    <strong>
+                      {record.workout_type === "pullup"
+                        ? `${record.target_total}회 · ${record.set_count}세트`
+                        : `${record.total_reps} / ${record.target_total}회`}
+                    </strong>
+                    <em className={succeeded ? "success" : "keep"}>
+                      {succeeded ? "다음 목표 +10" : "목표 유지"}
+                    </em>
+                  </div>
+                ) : (
+                  <div className="admin-result">
+                    <span>완료 체크</span>
+                    <strong>{record.routine_id === routine.id ? "이 루틴 완료" : `${record.routine_id} 완료`}</strong>
+                    <em className="success">DONE</em>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      <p className="admin-note">이 정보는 등록된 운영 계정에서만 조회할 수 있으며 다른 사용자의 기록은 수정할 수 없습니다.</p>
+    </section>
+  );
+}
+
 function App() {
   const today = useMemo(getSeoulToday, []);
   const [selectedId, setSelectedId] = useState(() => getTodayRoutineId(today));
@@ -654,6 +798,8 @@ function App() {
   const [pushRecords, setPushRecords] = useState<WorkoutSession[]>([]);
   const [pullRecords, setPullRecords] = useState<WorkoutSession[]>([]);
   const [completionRecords, setCompletionRecords] = useState<RoutineCompletion[]>([]);
+  const [recordsRevision, setRecordsRevision] = useState(0);
+  const isAdmin = session?.user.email?.toLowerCase() === ADMIN_EMAIL;
   const todayId = getTodayRoutineId(today);
   const selectedRef = useRef<HTMLButtonElement>(null);
   const weekMapRef = useRef<HTMLDivElement>(null);
@@ -720,6 +866,7 @@ function App() {
     if (!completionResult.error) {
       setCompletionRecords((completionResult.data ?? []) as RoutineCompletion[]);
     }
+    setRecordsRevision((revision) => revision + 1);
   }
 
   useEffect(() => {
@@ -769,7 +916,7 @@ function App() {
           <div className="topbar-meta">
             <span className={`auth-state ${session ? "connected" : ""}`}>
               <span aria-hidden="true" />
-              {session ? "기록 로그인됨" : "기록 미로그인"}
+              {session ? (isAdmin ? "관리자 로그인됨" : "기록 로그인됨") : "기록 미로그인"}
             </span>
             <span className="period">2026.07.23 — 10.20</span>
           </div>
@@ -847,6 +994,13 @@ function App() {
               <p className="eyebrow dark">ROUTINE NOT SET</p>
               <h2 id="selected-day-title">{selected.ko} 루틴은 아직 없습니다.</h2>
               <p>직접 정한 운동을 전달받으면 이 자리에 추가합니다.</p>
+              {isAdmin && (
+                <AdminDailyPanel
+                  workoutDate={selectedWorkoutDate}
+                  routine={selected}
+                  refreshToken={recordsRevision}
+                />
+              )}
             </div>
           ) : (
             <div className="detail-content">
@@ -895,7 +1049,7 @@ function App() {
                 </a>
               )}
 
-              {selected.id === "thu" && (
+              {selected.id === "thu" && !isAdmin && (
                 <WorkoutResultForm
                   workoutType="pushup"
                   session={session}
@@ -906,7 +1060,7 @@ function App() {
                   onSaved={loadRecords}
                 />
               )}
-              {selected.id === "sat" && (
+              {selected.id === "sat" && !isAdmin && (
                 <WorkoutResultForm
                   workoutType="pullup"
                   session={session}
@@ -917,13 +1071,20 @@ function App() {
                   onSaved={loadRecords}
                 />
               )}
-              {selected.id !== "thu" && selected.id !== "sat" && (
+              {selected.id !== "thu" && selected.id !== "sat" && !isAdmin && (
                 <RoutineCompletionPanel
                   routine={selected}
                   workoutDate={selectedWorkoutDate}
                   session={session}
                   completed={isRoutineCompleted(selected, selectedWorkoutDate)}
                   onChanged={loadRecords}
+                />
+              )}
+              {isAdmin && (
+                <AdminDailyPanel
+                  workoutDate={selectedWorkoutDate}
+                  routine={selected}
+                  refreshToken={recordsRevision}
                 />
               )}
             </div>
