@@ -17,10 +17,11 @@ export const supabase = isSupabaseConfigured
 export type WorkoutSession = {
   id: string;
   workout_date: string;
-  workout_type: "pushup" | "pullup";
+  workout_type: "pushup" | "pullup" | "recovery_pushup";
   target_total: number;
   total_reps: number;
   set_count: number | null;
+  set_reps: number[] | null;
   created_at: string;
 };
 
@@ -34,11 +35,17 @@ export type RoutineCompletion = {
 export type AdminDailyRecord = {
   user_id: string;
   user_email: string;
+  workout_date?: string;
   record_kind: "workout_session" | "routine_completion";
   routine_id: string | null;
-  workout_type: "pushup" | "pullup" | null;
+  workout_type: "pushup" | "pullup" | "recovery_pushup" | null;
   target_total: number | null;
   total_reps: number | null;
   set_count: number | null;
+  set_reps?: number[] | null;
   recorded_at: string;
+};
+
+export type AdminRoutineHistoryRecord = AdminDailyRecord & {
+  workout_date: string;
 };

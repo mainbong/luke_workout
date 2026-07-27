@@ -15,7 +15,7 @@ import {
 import {
   isSupabaseConfigured,
   supabase,
-  type AdminDailyRecord,
+  type AdminRoutineHistoryRecord,
   type RoutineCompletion,
   type WorkoutSession,
 } from "./supabase";
@@ -25,6 +25,7 @@ const END_DATE = "2026-10-20";
 const TOTAL_DAYS = 90;
 const PUSH_START_TARGET = 100;
 const PULL_START_TARGET = 30;
+const RECOVERY_PUSH_START_TARGET = 15;
 const ADMIN_EMAIL = "mainbbong@gmail.com";
 
 type Exercise = {
@@ -95,6 +96,10 @@ function formatRecordedAt(value: string) {
   }).format(new Date(value));
 }
 
+function getJourneyWeekFromValue(value: string) {
+  return getJourneyWeek(new Date(`${value}T00:00:00+09:00`));
+}
+
 function nextPushTarget(records: WorkoutSession[]) {
   if (records.length === 0) return PUSH_START_TARGET;
   const latest = records[0];
@@ -111,17 +116,172 @@ function nextPullTarget(records: WorkoutSession[]) {
     : latest.target_total;
 }
 
+function recoveryPushupSucceeded(record: WorkoutSession) {
+  return record.set_reps?.length === 5
+    && record.set_reps.every((reps) => reps >= record.target_total);
+}
+
+function nextRecoveryPushTarget(records: WorkoutSession[]) {
+  if (records.length === 0) return RECOVERY_PUSH_START_TARGET;
+  const latest = records[0];
+  return recoveryPushupSucceeded(latest)
+    ? latest.target_total + 1
+    : latest.target_total;
+}
+
 function buildRoutines(
   pushTarget: number,
   pullTarget: number,
+  recoveryPushTarget: number,
   week: number,
   latestPushRecord?: WorkoutSession,
   latestPullRecord?: WorkoutSession,
+  latestRecoveryPushRecord?: WorkoutSession,
 ): Routine[] {
   return [
-    { id: "mon", day: "MON", ko: "월요일", status: "pending", short: "루틴 미정" },
-    { id: "tue", day: "TUE", ko: "화요일", status: "pending", short: "루틴 미정" },
-    { id: "wed", day: "WED", ko: "수요일", status: "pending", short: "루틴 미정" },
+    {
+      id: "mon",
+      day: "MON",
+      ko: "월요일",
+      status: "ready",
+      short: `푸쉬업 ${recoveryPushTarget}×5`,
+      category: "PUSH RECOVERY",
+      title: "리커버리 푸쉬업",
+      summary: `${recoveryPushTarget}회를 한 세트로 끝까지 연결하되, 자세를 지키며 회복성 볼륨을 쌓습니다.`,
+      target: `오늘 목표 · ${recoveryPushTarget}회 × 5세트`,
+      record: latestRecoveryPushRecord
+        ? `${formatWorkoutDate(latestRecoveryPushRecord.workout_date)} 최근 기록 · ${latestRecoveryPushRecord.set_reps?.join(" · ")}회`
+        : undefined,
+      exercises: [
+        {
+          name: "리커버리 푸쉬업",
+          prescription: `${recoveryPushTarget}회 × 5세트`,
+          note: `${recoveryPushTarget}회를 최대한 언브로큰으로 진행합니다. 멈추더라도 3초 안에 다시 시작하고, 3초마다 1회씩 하더라도 정자세 푸쉬업으로 ${recoveryPushTarget}회를 모두 마친 뒤에 쉽니다. 인클라인·무릎 푸쉬업은 허용하지 않습니다.`,
+        },
+        {
+          name: "세트 간 휴식",
+          prescription: "1분 30초 ~ 2분 30초",
+          note: "호흡과 자세가 회복되면 범위 안에서 다음 세트를 시작합니다.",
+        },
+      ],
+    },
+    {
+      id: "tue",
+      day: "TUE",
+      ko: "화요일",
+      status: "ready",
+      short: "완전 휴식",
+      category: "REST DAY",
+      title: "완전 휴식",
+      summary: "별도 운동을 진행하지 않고 다음 훈련을 위해 회복합니다.",
+      target: "오늘 목표 · 운동 없음",
+      exercises: [
+        {
+          name: "휴식",
+          prescription: "운동 없음",
+          note: "정해진 운동 루틴 없이 쉽니다. 피로감이나 통증이 남아 있다면 회복을 우선합니다.",
+        },
+      ],
+    },
+    {
+      id: "wed",
+      day: "WED",
+      ko: "수요일",
+      status: "ready",
+      short: "팔 + 로우 + 러닝",
+      category: "ARMS + ROW",
+      title: "팔 루틴 + 원암 덤벨로우",
+      summary: "팔 3종은 다음 날 푸쉬업 미션을 고려해 여유를 남기고, 원암 덤벨로우는 RPE 8 기준으로 진행합니다.",
+      target: "오늘 목표 · 상체 4종 + 러닝머신 10분",
+      exercises: [
+        {
+          name: "덤벨 숄더프레스",
+          prescription: "10회 × 3세트",
+          note: "첫 세트가 RPE 7~8인 무게를 정해 3세트 동안 유지합니다. 10회에 실패하면 다음 세트부터 감량해 10회를 채우고, 허리가 뜨거나 팔의 좌우 균형이 무너지면 즉시 종료합니다.",
+          guides: [
+            {
+              label: "한국어 쇼츠 · 핵심 4포인트",
+              url: "https://www.youtube.com/shorts/QqhMqG8YO2k",
+            },
+            {
+              label: "한국어 상세 · 완전 기초 2분",
+              url: "https://www.youtube.com/watch?v=OMCJoZfKhxM",
+            },
+            {
+              label: "ACE · 자세 참고",
+              url: "https://www.acefitness.org/resources/everyone/exercise-library/45/seated-overhead-press/",
+            },
+          ],
+        },
+        {
+          name: "덤벨컬",
+          prescription: "10회 × 3세트",
+          note: "첫 10회가 RPE 7~8인 무게로 3세트를 진행합니다. 반동 없이 팔꿈치 위치와 손목을 유지하고, 10회에 실패하면 감량해 남은 세트의 10회를 채웁니다.",
+          guides: [
+            {
+              label: "한국어 쇼츠 · 덤벨컬 방법",
+              url: "https://www.youtube.com/shorts/M3kVtY-oLsk",
+            },
+            {
+              label: "한국어 상세 · 고립과 기본 자세",
+              url: "https://www.youtube.com/watch?v=z3w1txqnGBs",
+            },
+            {
+              label: "ACE · 자세 참고",
+              url: "https://www.acefitness.org/resources/everyone/exercise-library/44/seated-biceps-curl/",
+            },
+          ],
+        },
+        {
+          name: "덤벨 오버헤드 트라이셉스 익스텐션",
+          prescription: "12회 × 3세트",
+          note: "덤벨 하나를 양손으로 잡습니다. 첫 12회가 RPE 7~8인 무게를 유지하고, 실패하면 감량해 12회를 채웁니다. 팔꿈치는 정면과 어깨너비를 유지하며 머리나 목에 닿지 않게 천천히 내립니다.",
+          guides: [
+            {
+              label: "한국어 쇼츠 · 정석 자세",
+              url: "https://www.youtube.com/shorts/V8YlItAMIsU",
+            },
+            {
+              label: "한국어 상세 · 덤벨 오버헤드 삼두",
+              url: "https://www.youtube.com/watch?v=hzMKVpTK1GI",
+            },
+            {
+              label: "ACE · 자세 참고",
+              url: "https://www.acefitness.org/resources/everyone/exercise-library/74/triceps-extension/",
+            },
+          ],
+        },
+        {
+          name: "원암 덤벨로우",
+          prescription: "한쪽 15회 × 5세트",
+          note: "벤치에 반대쪽 손과 무릎을 지지합니다. 첫 15회가 RPE 8인 무게로 시작해 가능한 가장 작은 단위로 증량합니다. 15회에 실패하면 증량을 멈추고 남은 세트는 같은 무게로 자세를 유지할 수 있는 최대 횟수까지 진행합니다. 양쪽을 마쳐야 1세트입니다.",
+          guides: [
+            {
+              label: "한국어 쇼츠 · 정자세",
+              url: "https://www.youtube.com/shorts/j1EyGHSSw-0",
+            },
+            {
+              label: "한국어 상세 · 벤치 활용 기초",
+              url: "https://www.youtube.com/watch?v=5y2LKebrvAk",
+            },
+            {
+              label: "ACE · 자세 참고",
+              url: "https://www.acefitness.org/resources/everyone/exercise-library/126/single-arm-row/",
+            },
+          ],
+        },
+        {
+          name: "세트 간 휴식",
+          prescription: "1분 30초 ~ 2분",
+          note: "원암 덤벨로우는 양쪽을 모두 마친 뒤 휴식합니다.",
+        },
+        {
+          name: "러닝머신",
+          prescription: "속도 7 · 10분",
+          note: "웨이트 루틴을 모두 마친 뒤 진행합니다.",
+        },
+      ],
+    },
     {
       id: "thu",
       day: "THU",
@@ -130,20 +290,31 @@ function buildRoutines(
       short: `푸쉬업 ${pushTarget}`,
       category: "WEIGHT PUSH",
       title: "푸쉬업 맥스 미션",
-      summary: "근력 운동처럼 세트마다 1분 30초를 쉬며 최대 반복을 수행합니다.",
+      summary: "정자세로 가능한 최대 반복을 5세트 수행하고, 세트 합계로 이번 미션의 성공 여부를 판정합니다.",
       target: `현재 목표 · 5세트 합계 ${pushTarget}회`,
       record: latestPushRecord
         ? `${formatWorkoutDate(latestPushRecord.workout_date)} 최근 기록 · ${latestPushRecord.total_reps} / ${latestPushRecord.target_total}회`
         : undefined,
       exercises: [
         {
-          name: "푸쉬업",
+          name: "1. 세트 수행",
           prescription: "최대 5세트",
-          note: "각 세트 실패 직전까지. 자세가 무너지면 해당 세트 종료.",
+          note: "각 세트는 정자세를 유지할 수 있는 실패 직전까지 수행합니다. 허리가 꺾이거나 몸통이 무너지는 등 자세가 흐트러지기 시작하면 억지로 반복하지 않고 그 세트를 종료합니다.",
         },
         {
-          name: "세트 간 휴식",
+          name: "2. 세트 사이",
           prescription: "1분 30초",
+          note: "세트가 끝나면 정확히 1분 30초를 쉬고 다음 세트에 들어갑니다. 같은 방식으로 최대 5세트까지만 진행합니다.",
+        },
+        {
+          name: "3. 오늘의 성공 판정",
+          prescription: `5세트 합계 ${pushTarget}회`,
+          note: `5세트에서 수행한 횟수를 모두 더합니다. 합계가 ${pushTarget}회 이상이면 성공이고, 미만이면 실패입니다. 결과 입력에는 5세트 합계만 기록합니다.`,
+        },
+        {
+          name: "4. 다음 푸쉬업 데이",
+          prescription: "성공 +10회 · 실패 유지",
+          note: `성공하면 다음 목요일의 5세트 합계 목표가 ${pushTarget + 10}회로 올라갑니다. 실패하면 다음 목요일에도 ${pushTarget}회에 다시 도전합니다. 목표 계산은 로그인한 사용자 자신의 기록만 사용합니다.`,
         },
       ],
     },
@@ -181,20 +352,31 @@ function buildRoutines(
       short: `풀업 ${pullTarget}`,
       category: "WEIGHT PULL",
       title: "풀업 미션 + 러닝머신",
-      summary: "풀업을 웨이트 세트처럼 수행한 뒤 러닝머신을 진행합니다.",
+      summary: "한 세트의 횟수는 자유롭게 끊되, 오늘의 목표 총량을 모두 채울 때까지 반복합니다.",
       target: `현재 목표 · 풀업 총 ${pullTarget}회`,
       record: latestPullRecord
         ? `${formatWorkoutDate(latestPullRecord.workout_date)} 최근 기록 · ${latestPullRecord.total_reps} / ${latestPullRecord.target_total}회 · ${latestPullRecord.set_count}세트`
         : undefined,
       exercises: [
         {
-          name: "풀업 미션",
+          name: "1. 오늘의 종료 조건",
           prescription: `총 ${pullTarget}회 · 완료할 때까지`,
-          note: "완료에 든 세트 수를 기록. 10세트 안에 완료하면 다음 주 목표 +10회. 보조 중량 조건 없음.",
+          note: `하루의 정해진 총 ${pullTarget}회를 모두 채우면 풀업 미션을 종료합니다. '최대 10세트'가 아니므로 10세트를 넘겨도 목표 횟수를 성공할 때까지 계속합니다.`,
         },
         {
-          name: "세트 간 휴식",
-          prescription: "1분 30초",
+          name: "2. 세트 수행과 휴식",
+          prescription: "철봉에서 내려오면 1분 30초",
+          note: "한 세트에 몇 개씩 끊어가는지는 자유입니다. 철봉에서 내려오는 순간 한 세트가 끝나며, 1분 30초를 쉰 뒤 바로 다음 세트에 들어갑니다.",
+        },
+        {
+          name: "3. 성공 판정 예시",
+          prescription: "30회 · 10세트 이내 성공",
+          note: "예: 5, 5, 3, 3, 3, 3, 2, 2, 2, 2회 = 총 30회, 10세트. 10세트 안에 목표를 채웠으므로 다음 풀업 데이 목표는 40회입니다.",
+        },
+        {
+          name: "4. 다음 풀업 데이",
+          prescription: "10세트 이내 +10회 · 11세트 이상 유지",
+          note: `총 ${pullTarget}회를 10세트 이내에 마치면 다음 풀업 데이 목표가 ${pullTarget + 10}회로 올라갑니다. 11세트 이상 걸렸다면 목표를 완수했더라도 다음 풀업 데이에 같은 ${pullTarget}회로 다시 도전합니다. 완료에 사용한 전체 세트 수를 반드시 기록합니다.`,
         },
         {
           name: "러닝머신",
@@ -523,6 +705,251 @@ function WorkoutResultForm({
   );
 }
 
+function RecoveryPushupResultForm({
+  session,
+  records,
+  currentTarget,
+  defaultDate,
+  onSaved,
+}: {
+  session: Session | null;
+  records: WorkoutSession[];
+  currentTarget: number;
+  defaultDate: string;
+  onSaved: () => Promise<void>;
+}) {
+  const [email, setEmail] = useState("");
+  const [workoutDate, setWorkoutDate] = useState(defaultDate);
+  const [setReps, setSetReps] = useState(["", "", "", "", ""]);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const savedRecord = records.find((record) => record.workout_date === workoutDate);
+
+  useEffect(() => {
+    if (savedRecord?.set_reps) {
+      setSetReps(savedRecord.set_reps.map(String));
+    } else {
+      setSetReps(["", "", "", "", ""]);
+    }
+  }, [savedRecord, workoutDate]);
+
+  async function sendMagicLink(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase) return;
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: `${window.location.origin}${import.meta.env.BASE_URL}` },
+    });
+    setBusy(false);
+    setMessage(error ? error.message : "로그인 링크를 보냈습니다. 가장 최근 메일의 링크를 열어주세요.");
+  }
+
+  async function saveResult(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !session) return;
+    const workoutDay = new Date(`${workoutDate}T00:00:00+09:00`).getDay();
+    if (workoutDay !== 1) {
+      setMessage("리커버리 푸쉬업 기록은 월요일 날짜로 입력해주세요.");
+      return;
+    }
+
+    const reps = setReps.map(Number);
+    if (reps.some((value) => !Number.isInteger(value) || value < 0)) {
+      setMessage("각 세트 횟수를 0 이상의 정수로 입력해주세요.");
+      return;
+    }
+
+    const target = savedRecord?.target_total ?? currentTarget;
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase.from("workout_sessions").upsert(
+      {
+        user_id: session.user.id,
+        workout_date: workoutDate,
+        workout_type: "recovery_pushup",
+        target_total: target,
+        total_reps: reps.reduce((sum, value) => sum + value, 0),
+        set_count: 5,
+        set_reps: reps,
+      },
+      { onConflict: "user_id,workout_date,workout_type" },
+    );
+
+    if (error) {
+      setMessage(`저장하지 못했습니다: ${error.message}`);
+    } else {
+      await onSaved();
+      const succeeded = reps.every((value) => value >= target);
+      setMessage(`저장 완료 · 다음 목표 ${succeeded ? target + 1 : target}회 × 5세트`);
+    }
+    setBusy(false);
+  }
+
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+  }
+
+  if (!session) {
+    return (
+      <section className="result-panel" aria-labelledby="recovery-result-title">
+        <div>
+          <p className="eyebrow dark">RESULT LOG</p>
+          <h3 id="recovery-result-title">이메일로 기록 시작</h3>
+          <p>신규 사용자는 15회 × 5세트에서 시작하고, 목표는 내 성공 기록으로만 계산됩니다.</p>
+        </div>
+        <form className="login-form" onSubmit={sendMagicLink}>
+          <label htmlFor="recovery-login-email">이메일</label>
+          <div>
+            <input
+              id="recovery-login-email"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              autoComplete="email"
+              placeholder="luke@example.com"
+              required
+            />
+            <button type="submit" disabled={busy}>
+              <LogIn size={16} aria-hidden="true" />
+              {busy ? "전송 중" : "로그인 링크 받기"}
+            </button>
+          </div>
+          {message && <p className="form-message" role="status">{message}</p>}
+        </form>
+      </section>
+    );
+  }
+
+  return (
+    <section className="result-panel" aria-labelledby="recovery-result-title">
+      <div className="result-heading">
+        <div>
+          <p className="eyebrow dark">RESULT LOG</p>
+          <h3 id="recovery-result-title">월요일 5세트 결과 입력</h3>
+          <p>5세트 모두 이번 목표 이상이면 다음 월요일부터 세트당 1회가 올라갑니다.</p>
+        </div>
+        <button className="text-button" type="button" onClick={() => void signOut()}>
+          <LogOut size={14} aria-hidden="true" /> 로그아웃
+        </button>
+      </div>
+      <form className="recovery-result-form" onSubmit={saveResult}>
+        <label className="recovery-date">
+          운동 날짜
+          <input
+            type="date"
+            min="2026-07-23"
+            max={END_DATE}
+            value={workoutDate}
+            onChange={(event) => setWorkoutDate(event.target.value)}
+            required
+          />
+        </label>
+        <fieldset>
+          <legend>세트별 실제 횟수</legend>
+          <div className="set-reps-grid">
+            {setReps.map((value, index) => (
+              <label key={index}>
+                {index + 1}세트
+                <span className="number-input">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    inputMode="numeric"
+                    value={value}
+                    onChange={(event) => {
+                      const next = [...setReps];
+                      next[index] = event.target.value;
+                      setSetReps(next);
+                    }}
+                    required
+                  />
+                  <span>회</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <button className="save-button" type="submit" disabled={busy}>
+          <Save size={17} aria-hidden="true" />
+          {busy ? "저장 중" : savedRecord ? "기록 수정" : "결과 저장"}
+        </button>
+      </form>
+      <p className="rule-preview">
+        이번 목표 <strong>{savedRecord?.target_total ?? currentTarget}회 × 5</strong>
+        <span aria-hidden="true">→</span>
+        5세트 모두 성공 <strong>세트당 +1</strong> · 실패 <strong>유지</strong>
+      </p>
+      {message && <p className="form-message" role="status">{message}</p>}
+    </section>
+  );
+}
+
+function UserRoutineHistory({
+  routine,
+  workoutRecords,
+  completionRecords,
+}: {
+  routine: Routine;
+  workoutRecords: WorkoutSession[];
+  completionRecords: RoutineCompletion[];
+}) {
+  const isNumeric = routine.id === "mon" || routine.id === "thu" || routine.id === "sat";
+  const records = isNumeric
+    ? workoutRecords
+    : completionRecords.filter((record) => record.routine_id === routine.id);
+
+  return (
+    <section className="history-panel" aria-labelledby="user-history-title">
+      <div className="history-heading">
+        <div>
+          <p className="eyebrow dark">MY HISTORY</p>
+          <h3 id="user-history-title">내 주차별 기록</h3>
+        </div>
+        <strong>{records.length}회</strong>
+      </div>
+      {records.length === 0 ? (
+        <p className="history-empty">아직 이 요일에 저장한 기록이 없습니다.</p>
+      ) : (
+        <div className="history-list">
+          {records.map((record) => {
+            if ("workout_type" in record) {
+              const succeeded = record.workout_type === "recovery_pushup"
+                ? recoveryPushupSucceeded(record)
+                : record.workout_type === "pullup"
+                  ? record.set_count !== null && record.set_count <= 10
+                  : record.total_reps >= record.target_total;
+              const result = record.workout_type === "recovery_pushup"
+                ? `${record.set_reps?.join(" · ")}회 / 목표 ${record.target_total}×5`
+                : record.workout_type === "pullup"
+                  ? `목표 ${record.target_total}회 · ${record.set_count}세트`
+                  : `${record.total_reps} / ${record.target_total}회`;
+              return (
+                <article key={record.id}>
+                  <div><strong>{formatWorkoutDate(record.workout_date)}</strong><small>WEEK {getJourneyWeekFromValue(record.workout_date)}</small></div>
+                  <span>{result}</span>
+                  <em className={succeeded ? "success" : "keep"}>{succeeded ? "다음 목표 증가" : "목표 유지"}</em>
+                </article>
+              );
+            }
+            return (
+              <article key={record.id}>
+                <div><strong>{formatWorkoutDate(record.workout_date)}</strong><small>WEEK {getJourneyWeekFromValue(record.workout_date)}</small></div>
+                <span>{routine.id === "tue" ? "휴식 완료" : "루틴 완료"}</span>
+                <em className="success">DONE</em>
+              </article>
+            );
+          })}
+        </div>
+      )}
+      <p className="history-note">같은 날짜를 다시 저장하면 수정되고, 다음 주 기록은 새 항목으로 계속 쌓입니다.</p>
+    </section>
+  );
+}
+
 function RoutineCompletionPanel({
   routine,
   workoutDate,
@@ -676,24 +1103,25 @@ function AdminDailyPanel({
   routine: Routine;
   refreshToken: number;
 }) {
-  const [records, setRecords] = useState<AdminDailyRecord[]>([]);
+  const [records, setRecords] = useState<AdminRoutineHistoryRecord[]>([]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const dailyRecords = records.filter((record) => record.workout_date === workoutDate);
 
   async function loadAdminRecords() {
     if (!supabase) return;
     setBusy(true);
     setMessage("");
 
-    const { data, error } = await supabase.rpc("get_admin_daily_records", {
-      target_date: workoutDate,
+    const { data, error } = await supabase.rpc("get_admin_routine_history", {
+      target_routine_id: routine.id,
     });
 
     if (error) {
       setRecords([]);
       setMessage(`관리자 기록을 불러오지 못했습니다: ${error.message}`);
     } else {
-      setRecords((data ?? []) as AdminDailyRecord[]);
+      setRecords((data ?? []) as AdminRoutineHistoryRecord[]);
     }
     setBusy(false);
   }
@@ -705,7 +1133,7 @@ function AdminDailyPanel({
 
   useEffect(() => {
     void loadAdminRecords();
-  }, [workoutDate, refreshToken]);
+  }, [routine.id, refreshToken]);
 
   return (
     <section className="admin-panel" aria-labelledby="admin-panel-title">
@@ -732,27 +1160,31 @@ function AdminDailyPanel({
       <div className="admin-summary">
         <span><Users size={15} aria-hidden="true" /> 기록 사용자</span>
         <strong>{new Set(records.map((record) => record.user_id)).size}명</strong>
-        <small>{routine.ko} · {routine.short}</small>
+        <small>{routine.ko} 누적 {records.length}회</small>
       </div>
 
       {message && <p className="form-message" role="alert">{message}</p>}
 
-      {!busy && !message && records.length === 0 && (
+      {!busy && !message && dailyRecords.length === 0 && (
         <div className="admin-empty">
-          <strong>아직 저장된 기록이 없습니다.</strong>
-          <span>이 날짜에 사용자가 완료 체크나 결과 저장을 하면 여기에 표시됩니다.</span>
+          <strong>선택한 날짜에는 저장된 기록이 없습니다.</strong>
+          <span>아래 누적 기록에서 이전 주차의 기록을 모두 확인할 수 있습니다.</span>
         </div>
       )}
 
-      {records.length > 0 && (
+      {dailyRecords.length > 0 && (
         <div className="admin-records" aria-label={`${formatWorkoutDate(workoutDate)} 사용자 기록`}>
-          {records.map((record) => {
+          {dailyRecords.map((record) => {
             const isWorkout = record.record_kind === "workout_session";
-            const succeeded = record.workout_type === "pullup"
-              ? record.set_count !== null && record.set_count <= 10
-              : record.total_reps !== null
+            const succeeded = record.workout_type === "recovery_pushup"
+              ? record.set_reps?.length === 5
                 && record.target_total !== null
-                && record.total_reps >= record.target_total;
+                && record.set_reps.every((reps) => reps >= record.target_total!)
+              : record.workout_type === "pullup"
+                ? record.set_count !== null && record.set_count <= 10
+                : record.total_reps !== null
+                  && record.target_total !== null
+                  && record.total_reps >= record.target_total;
 
             return (
               <article key={`${record.record_kind}-${record.user_id}-${record.recorded_at}`}>
@@ -764,12 +1196,16 @@ function AdminDailyPanel({
                   <div className="admin-result">
                     <span>{record.workout_type === "pullup" ? "풀업" : "푸쉬업"}</span>
                     <strong>
-                      {record.workout_type === "pullup"
+                      {record.workout_type === "recovery_pushup"
+                        ? `${record.set_reps?.join(" · ")}회 / 목표 ${record.target_total}×5`
+                        : record.workout_type === "pullup"
                         ? `${record.target_total}회 · ${record.set_count}세트`
                         : `${record.total_reps} / ${record.target_total}회`}
                     </strong>
                     <em className={succeeded ? "success" : "keep"}>
-                      {succeeded ? "다음 목표 +10" : "목표 유지"}
+                      {succeeded
+                        ? record.workout_type === "recovery_pushup" ? "다음 목표 +1/세트" : "다음 목표 +10"
+                        : "목표 유지"}
                     </em>
                   </div>
                 ) : (
@@ -779,6 +1215,57 @@ function AdminDailyPanel({
                     <em className="success">DONE</em>
                   </div>
                 )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="admin-history-heading">
+        <strong>전체 주차 기록</strong>
+        <span>{records.length}회 저장됨</span>
+      </div>
+      {records.length === 0 ? (
+        <div className="admin-empty">
+          <strong>아직 누적된 기록이 없습니다.</strong>
+          <span>사용자가 이 요일의 결과나 완료 상태를 저장하면 주차별로 쌓입니다.</span>
+        </div>
+      ) : (
+        <div className="admin-records admin-history-records" aria-label={`${routine.ko} 전체 주차 기록`}>
+          {records.map((record) => {
+            const isRecovery = record.workout_type === "recovery_pushup";
+            const succeeded = isRecovery
+              ? record.set_reps?.length === 5
+                && record.target_total !== null
+                && record.set_reps.every((reps) => reps >= record.target_total!)
+              : record.workout_type === "pullup"
+                ? record.set_count !== null && record.set_count <= 10
+                : record.workout_type === "pushup"
+                  ? record.total_reps !== null
+                    && record.target_total !== null
+                    && record.total_reps >= record.target_total
+                  : true;
+            const result = isRecovery
+              ? `${record.set_reps?.join(" · ")}회 / 목표 ${record.target_total}×5`
+              : record.workout_type === "pullup"
+                ? `목표 ${record.target_total}회 · ${record.set_count}세트`
+                : record.workout_type === "pushup"
+                  ? `${record.total_reps} / ${record.target_total}회`
+                  : record.routine_id === "tue" ? "휴식 완료" : "루틴 완료";
+
+            return (
+              <article key={`history-${record.record_kind}-${record.user_id}-${record.workout_date}`}>
+                <div className="admin-user">
+                  <span>{record.user_email}</span>
+                  <small>{formatWorkoutDate(record.workout_date)} · WEEK {getJourneyWeekFromValue(record.workout_date)} · {formatRecordedAt(record.recorded_at)}</small>
+                </div>
+                <div className="admin-result">
+                  <span>{record.record_kind === "workout_session" ? "결과" : "완료 체크"}</span>
+                  <strong>{result}</strong>
+                  <em className={succeeded ? "success" : "keep"}>
+                    {record.record_kind === "routine_completion" ? "DONE" : succeeded ? "성공" : "목표 유지"}
+                  </em>
+                </div>
               </article>
             );
           })}
@@ -797,6 +1284,7 @@ function App() {
   const [authNotice, setAuthNotice] = useState("");
   const [pushRecords, setPushRecords] = useState<WorkoutSession[]>([]);
   const [pullRecords, setPullRecords] = useState<WorkoutSession[]>([]);
+  const [recoveryPushRecords, setRecoveryPushRecords] = useState<WorkoutSession[]>([]);
   const [completionRecords, setCompletionRecords] = useState<RoutineCompletion[]>([]);
   const [recordsRevision, setRecordsRevision] = useState(0);
   const isAdmin = session?.user.email?.toLowerCase() === ADMIN_EMAIL;
@@ -807,6 +1295,7 @@ function App() {
   const week = getJourneyWeek(today);
   const pushTarget = nextPushTarget(pushRecords);
   const pullTarget = nextPullTarget(pullRecords);
+  const recoveryPushTarget = nextRecoveryPushTarget(recoveryPushRecords);
   const visibleDays = useMemo(
     () => Array.from({ length: 7 }, (_, index) => {
       const date = addDays(today, index - 3);
@@ -814,26 +1303,33 @@ function App() {
       const routineId = getTodayRoutineId(date);
       const pushRecord = pushRecords.find((record) => record.workout_date === workoutDate);
       const pullRecord = pullRecords.find((record) => record.workout_date === workoutDate);
+      const recoveryPushRecord = recoveryPushRecords.find((record) => record.workout_date === workoutDate);
       const datePushTarget = pushRecord?.target_total ?? pushTarget;
       const datePullTarget = pullRecord?.target_total ?? pullTarget;
+      const dateRecoveryPushTarget = recoveryPushRecord?.target_total ?? recoveryPushTarget;
       const routine = buildRoutines(
         datePushTarget,
         datePullTarget,
+        dateRecoveryPushTarget,
         getJourneyWeek(date),
         pushRecord,
         pullRecord,
+        recoveryPushRecord,
       ).find((item) => item.id === routineId);
 
       if (!routine) throw new Error(`Missing routine for ${routineId}`);
       return { date, workoutDate, routine };
     }),
-    [pullRecords, pullTarget, pushRecords, pushTarget, today],
+    [pullRecords, pullTarget, pushRecords, pushTarget, recoveryPushRecords, recoveryPushTarget, today],
   );
   const selectedDay = visibleDays.find(({ routine }) => routine.id === selectedId) ?? visibleDays[3];
   const selected = selectedDay.routine;
   const selectedWorkoutDate = selectedDay.workoutDate;
 
   function isRoutineCompleted(routine: Routine, workoutDate: string) {
+    if (routine.id === "mon") {
+      return recoveryPushRecords.some((record) => record.workout_date === workoutDate);
+    }
     if (routine.id === "thu") {
       return pushRecords.some((record) => record.workout_date === workoutDate);
     }
@@ -850,7 +1346,7 @@ function App() {
     const [sessionResult, completionResult] = await Promise.all([
       supabase
         .from("workout_sessions")
-        .select("id, workout_date, workout_type, target_total, total_reps, set_count, created_at")
+        .select("id, workout_date, workout_type, target_total, total_reps, set_count, set_reps, created_at")
         .order("workout_date", { ascending: false }),
       supabase
         .from("routine_completions")
@@ -862,6 +1358,7 @@ function App() {
       const records = (sessionResult.data ?? []) as WorkoutSession[];
       setPushRecords(records.filter((record) => record.workout_type === "pushup"));
       setPullRecords(records.filter((record) => record.workout_type === "pullup"));
+      setRecoveryPushRecords(records.filter((record) => record.workout_type === "recovery_pushup"));
     }
     if (!completionResult.error) {
       setCompletionRecords((completionResult.data ?? []) as RoutineCompletion[]);
@@ -877,6 +1374,7 @@ function App() {
       if (!nextSession) {
         setPushRecords([]);
         setPullRecords([]);
+        setRecoveryPushRecords([]);
         setCompletionRecords([]);
       }
     });
@@ -1060,6 +1558,15 @@ function App() {
                   onSaved={loadRecords}
                 />
               )}
+              {selected.id === "mon" && !isAdmin && (
+                <RecoveryPushupResultForm
+                  session={session}
+                  records={recoveryPushRecords}
+                  currentTarget={recoveryPushTarget}
+                  defaultDate={selectedWorkoutDate}
+                  onSaved={loadRecords}
+                />
+              )}
               {selected.id === "sat" && !isAdmin && (
                 <WorkoutResultForm
                   workoutType="pullup"
@@ -1071,13 +1578,28 @@ function App() {
                   onSaved={loadRecords}
                 />
               )}
-              {selected.id !== "thu" && selected.id !== "sat" && !isAdmin && (
+              {selected.id !== "mon" && selected.id !== "thu" && selected.id !== "sat" && !isAdmin && (
                 <RoutineCompletionPanel
                   routine={selected}
                   workoutDate={selectedWorkoutDate}
                   session={session}
                   completed={isRoutineCompleted(selected, selectedWorkoutDate)}
                   onChanged={loadRecords}
+                />
+              )}
+              {session && !isAdmin && (
+                <UserRoutineHistory
+                  routine={selected}
+                  workoutRecords={
+                    selected.id === "mon"
+                      ? recoveryPushRecords
+                      : selected.id === "thu"
+                        ? pushRecords
+                        : selected.id === "sat"
+                          ? pullRecords
+                          : []
+                  }
+                  completionRecords={completionRecords}
                 />
               )}
               {isAdmin && (

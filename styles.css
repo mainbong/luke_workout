@@ -345,6 +345,29 @@ main { max-width: 1500px; margin: auto; }
 .result-form.pullup {
   grid-template-columns: minmax(160px, .8fr) minmax(140px, .65fr) auto;
 }
+.recovery-result-form { display: grid; gap: 14px; margin-top: 18px; }
+.recovery-result-form fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.recovery-result-form legend,
+.recovery-result-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+.recovery-date { max-width: 260px; }
+.recovery-result-form input {
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 12px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid #9ca393;
+  border-radius: 0;
+}
+.set-reps-grid { display: grid; grid-template-columns: repeat(5, minmax(90px, 1fr)); gap: 8px; margin-top: 7px; }
+.recovery-result-form .save-button { justify-self: start; }
 .number-input { position: relative; display: block; }
 .number-input input { padding-right: 36px; }
 .number-input > span { position: absolute; top: 12px; right: 12px; color: var(--muted); font-size: 13px; }
@@ -370,6 +393,41 @@ main { max-width: 1500px; margin: auto; }
 }
 .rule-preview strong { color: var(--ink); }
 .form-message { margin: 10px 0 0; color: #742610; font-size: 12px; font-weight: 800; }
+.history-panel {
+  margin-top: 16px;
+  padding: 20px 22px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+.history-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.history-heading h3 { margin: 0; font-size: 20px; letter-spacing: -.035em; }
+.history-heading > strong { padding: 5px 9px; color: white; background: var(--navy); font-size: 11px; }
+.history-list { display: grid; gap: 7px; margin-top: 14px; }
+.history-list article {
+  display: grid;
+  grid-template-columns: minmax(115px, .55fr) minmax(180px, 1.3fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 13px;
+  background: var(--cream);
+  border-left: 3px solid var(--navy);
+}
+.history-list article > div { display: grid; }
+.history-list article > div strong { font-size: 12px; }
+.history-list article > div small { color: var(--muted); font-size: 9px; font-weight: 900; }
+.history-list article > span { color: var(--muted); font-size: 11px; font-weight: 800; }
+.history-list em {
+  padding: 4px 7px;
+  color: white;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.history-list em.success { background: var(--navy); }
+.history-list em.keep { color: var(--deep); background: var(--blue); }
+.history-empty { margin: 14px 0 0; padding: 14px; color: var(--muted); background: var(--cream); font-size: 12px; }
+.history-note { margin: 10px 0 0; color: var(--muted); font-size: 9px; }
 .admin-panel {
   margin-top: 26px;
   padding: 22px;
@@ -433,6 +491,17 @@ main { max-width: 1500px; margin: auto; }
 .admin-empty strong { color: white; font-size: 13px; }
 .admin-empty span { font-size: 11px; }
 .admin-records { display: grid; gap: 8px; margin-top: 12px; }
+.admin-history-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255,255,255,.25);
+}
+.admin-history-heading strong { color: white; font-size: 15px; }
+.admin-history-heading span { color: var(--lime); font-size: 10px; font-weight: 900; }
 .admin-records article {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.25fr);
@@ -539,6 +608,10 @@ footer {
   .result-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
   .login-form > div,
   .result-form { grid-template-columns: 1fr; }
+  .set-reps-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .recovery-result-form .save-button { width: 100%; }
+  .history-list article { grid-template-columns: 1fr; gap: 7px; }
+  .history-list em { justify-self: start; }
   .auth-alert { align-items: flex-start; flex-direction: column; gap: 2px; }
   .rule-preview { align-items: flex-start; flex-wrap: wrap; }
   .admin-panel { margin-right: -2px; margin-left: -2px; padding: 17px; }
