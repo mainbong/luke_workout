@@ -1460,20 +1460,21 @@ function App() {
               return (
                 <button
                   ref={isSelected ? selectedRef : undefined}
-                  className={`day-button ${routine.status} ${isCompleted ? "done" : ""} ${isSelected ? "selected" : ""}`}
+                  className={`day-button ${routine.status} ${isToday ? "today" : ""} ${isCompleted ? "done" : ""} ${isSelected ? "selected" : ""}`}
                   key={workoutDate}
                   onClick={() => setSelectedId(routine.id)}
                   aria-pressed={isSelected}
                   aria-label={`${routine.ko} ${date.getMonth() + 1}월 ${date.getDate()}일, ${routine.short}${isToday ? ", 오늘" : ""}`}
                   type="button"
                 >
+                  {isToday && <span className="today-badge">TODAY</span>}
                   <span className="day-label">{routine.day}</span>
                   <strong>{date.getDate()}</strong>
                   <small>{routine.short}</small>
                   <span className="day-state">
                     {isCompleted ? (
-                      <><Check size={12} /> {isToday ? "TODAY · DONE" : "DONE"}</>
-                    ) : isToday ? "TODAY" : routine.status === "ready" ? "FIXED" : "WAITING"}
+                      <><Check size={12} /> DONE</>
+                    ) : routine.status === "ready" ? "FIXED" : "WAITING"}
                   </span>
                 </button>
               );
