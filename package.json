@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "check:progression": "node --experimental-strip-types scripts/check-progression.mjs",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false"
   },

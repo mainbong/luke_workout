@@ -17,7 +17,7 @@ export const supabase = isSupabaseConfigured
 export type WorkoutSession = {
   id: string;
   workout_date: string;
-  workout_type: "pushup" | "pullup" | "recovery_pushup";
+  workout_type: "pushup" | "pullup" | "recovery_pushup" | "sunday_pullup";
   target_total: number;
   total_reps: number;
   set_count: number | null;
@@ -38,7 +38,7 @@ export type AdminDailyRecord = {
   workout_date?: string;
   record_kind: "workout_session" | "routine_completion";
   routine_id: string | null;
-  workout_type: "pushup" | "pullup" | "recovery_pushup" | null;
+  workout_type: "pushup" | "pullup" | "recovery_pushup" | "sunday_pullup" | null;
   target_total: number | null;
   total_reps: number | null;
   set_count: number | null;

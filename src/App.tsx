@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
+import { fiveSetSucceeded, nextFiveSetTarget } from "./progression";
 import {
   isSupabaseConfigured,
   supabase,
@@ -26,6 +27,7 @@ const TOTAL_DAYS = 90;
 const PUSH_START_TARGET = 100;
 const PULL_START_TARGET = 30;
 const RECOVERY_PUSH_START_TARGET = 15;
+const SUNDAY_PULLUP_START_TARGET = 3;
 const ADMIN_EMAIL = "mainbbong@gmail.com";
 
 type Exercise = {
@@ -116,27 +118,16 @@ function nextPullTarget(records: WorkoutSession[]) {
     : latest.target_total;
 }
 
-function recoveryPushupSucceeded(record: WorkoutSession) {
-  return record.set_reps?.length === 5
-    && record.set_reps.every((reps) => reps >= record.target_total);
-}
-
-function nextRecoveryPushTarget(records: WorkoutSession[]) {
-  if (records.length === 0) return RECOVERY_PUSH_START_TARGET;
-  const latest = records[0];
-  return recoveryPushupSucceeded(latest)
-    ? latest.target_total + 1
-    : latest.target_total;
-}
-
 function buildRoutines(
   pushTarget: number,
   pullTarget: number,
   recoveryPushTarget: number,
+  sundayPullupTarget: number,
   week: number,
   latestPushRecord?: WorkoutSession,
   latestPullRecord?: WorkoutSession,
   latestRecoveryPushRecord?: WorkoutSession,
+  latestSundayPullupRecord?: WorkoutSession,
 ): Routine[] {
   return [
     {
@@ -390,16 +381,19 @@ function buildRoutines(
       day: "SUN",
       ko: "일요일",
       status: "ready",
-      short: "등 볼륨 + 러닝",
+      short: `등 볼륨 · 풀업 ${sundayPullupTarget}×5`,
       category: "BACK VOLUME",
       title: "등 볼륨 루틴 + 러닝머신",
       summary: "반복 수와 자세를 우선하며, 정한 규칙에 따라 보조·증량·감량을 적용합니다.",
-      target: "오늘 목표 · 등 운동 4종 + 러닝머신 10분",
+      target: `오늘 목표 · 풀업 ${sundayPullupTarget}회 × 5세트 + 등 운동 3종 + 러닝머신 10분`,
+      record: latestSundayPullupRecord
+        ? `${formatWorkoutDate(latestSundayPullupRecord.workout_date)} 최근 맨몸 풀업 · ${latestSundayPullupRecord.set_reps?.join(" · ")}회`
+        : undefined,
       exercises: [
         {
           name: "풀업",
-          prescription: "3회 × 5세트",
-          note: "맨몸으로 시작. 3회를 채우지 못하는 순간 풀업머신으로 전환해 해당 세트의 3회를 채웁니다. 예: 2개째에서 실패하면 보조중량을 최소로 놓고 2개 추가.",
+          prescription: `${sundayPullupTarget}회 × 5세트`,
+          note: `각 세트는 맨몸으로 ${sundayPullupTarget}회에 도전합니다. 실패하면 풀업머신으로 전환해 해당 세트의 ${sundayPullupTarget}회를 채웁니다. 5세트 모두 맨몸으로 성공하면 다음 일요일부터 세트당 1회 증가하고, 한 세트라도 머신 보조를 쓰면 목표를 유지합니다.`,
           guides: [
             {
               label: "보조 풀업머신 셋업·안전",
@@ -705,19 +699,25 @@ function WorkoutResultForm({
   );
 }
 
-function RecoveryPushupResultForm({
+function FiveSetProgressForm({
+  workoutType,
   session,
   records,
   currentTarget,
   defaultDate,
   onSaved,
 }: {
+  workoutType: "recovery_pushup" | "sunday_pullup";
   session: Session | null;
   records: WorkoutSession[];
   currentTarget: number;
   defaultDate: string;
   onSaved: () => Promise<void>;
 }) {
+  const isSundayPullup = workoutType === "sunday_pullup";
+  const dayName = isSundayPullup ? "일요일" : "월요일";
+  const resultTitleId = `${workoutType}-result-title`;
+  const loginEmailId = `${workoutType}-login-email`;
   const [email, setEmail] = useState("");
   const [workoutDate, setWorkoutDate] = useState(defaultDate);
   const [setReps, setSetReps] = useState(["", "", "", "", ""]);
@@ -750,8 +750,8 @@ function RecoveryPushupResultForm({
     event.preventDefault();
     if (!supabase || !session) return;
     const workoutDay = new Date(`${workoutDate}T00:00:00+09:00`).getDay();
-    if (workoutDay !== 1) {
-      setMessage("리커버리 푸쉬업 기록은 월요일 날짜로 입력해주세요.");
+    if (workoutDay !== (isSundayPullup ? 0 : 1)) {
+      setMessage(`${dayName} 기록은 ${dayName} 날짜로 입력해주세요.`);
       return;
     }
 
@@ -768,7 +768,7 @@ function RecoveryPushupResultForm({
       {
         user_id: session.user.id,
         workout_date: workoutDate,
-        workout_type: "recovery_pushup",
+        workout_type: workoutType,
         target_total: target,
         total_reps: reps.reduce((sum, value) => sum + value, 0),
         set_count: 5,
@@ -794,17 +794,17 @@ function RecoveryPushupResultForm({
 
   if (!session) {
     return (
-      <section className="result-panel" aria-labelledby="recovery-result-title">
+      <section className="result-panel" aria-labelledby={resultTitleId}>
         <div>
           <p className="eyebrow dark">RESULT LOG</p>
-          <h3 id="recovery-result-title">이메일로 기록 시작</h3>
-          <p>신규 사용자는 15회 × 5세트에서 시작하고, 목표는 내 성공 기록으로만 계산됩니다.</p>
+          <h3 id={resultTitleId}>이메일로 기록 시작</h3>
+          <p>신규 사용자는 {currentTarget}회 × 5세트에서 시작하고, 목표는 내 성공 기록으로만 계산됩니다.</p>
         </div>
         <form className="login-form" onSubmit={sendMagicLink}>
-          <label htmlFor="recovery-login-email">이메일</label>
+          <label htmlFor={loginEmailId}>이메일</label>
           <div>
             <input
-              id="recovery-login-email"
+              id={loginEmailId}
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
@@ -824,12 +824,12 @@ function RecoveryPushupResultForm({
   }
 
   return (
-    <section className="result-panel" aria-labelledby="recovery-result-title">
+    <section className="result-panel" aria-labelledby={resultTitleId}>
       <div className="result-heading">
         <div>
           <p className="eyebrow dark">RESULT LOG</p>
-          <h3 id="recovery-result-title">월요일 5세트 결과 입력</h3>
-          <p>5세트 모두 이번 목표 이상이면 다음 월요일부터 세트당 1회가 올라갑니다.</p>
+          <h3 id={resultTitleId}>{dayName} 5세트 결과 입력</h3>
+          <p>{isSundayPullup ? "각 세트에서 머신 도움 없이 성공한 맨몸 횟수만 입력하세요. " : ""}5세트 모두 이번 목표 이상이면 다음 {dayName}부터 세트당 1회가 올라갑니다.</p>
         </div>
         <button className="text-button" type="button" onClick={() => void signOut()}>
           <LogOut size={14} aria-hidden="true" /> 로그아웃
@@ -848,7 +848,7 @@ function RecoveryPushupResultForm({
           />
         </label>
         <fieldset>
-          <legend>세트별 실제 횟수</legend>
+          <legend>세트별 {isSundayPullup ? "맨몸 성공" : "실제"} 횟수</legend>
           <div className="set-reps-grid">
             {setReps.map((value, index) => (
               <label key={index}>
@@ -898,9 +898,10 @@ function UserRoutineHistory({
   completionRecords: RoutineCompletion[];
 }) {
   const isNumeric = routine.id === "mon" || routine.id === "thu" || routine.id === "sat";
-  const records = isNumeric
-    ? workoutRecords
-    : completionRecords.filter((record) => record.routine_id === routine.id);
+  const completions = completionRecords.filter((record) => record.routine_id === routine.id);
+  const records = routine.id === "sun"
+    ? [...workoutRecords, ...completions].sort((a, b) => b.workout_date.localeCompare(a.workout_date))
+    : isNumeric ? workoutRecords : completions;
 
   return (
     <section className="history-panel" aria-labelledby="user-history-title">
@@ -917,12 +918,13 @@ function UserRoutineHistory({
         <div className="history-list">
           {records.map((record) => {
             if ("workout_type" in record) {
-              const succeeded = record.workout_type === "recovery_pushup"
-                ? recoveryPushupSucceeded(record)
+              const isFiveSet = record.workout_type === "recovery_pushup" || record.workout_type === "sunday_pullup";
+              const succeeded = isFiveSet
+                ? fiveSetSucceeded(record)
                 : record.workout_type === "pullup"
                   ? record.set_count !== null && record.set_count <= 10
                   : record.total_reps >= record.target_total;
-              const result = record.workout_type === "recovery_pushup"
+              const result = isFiveSet
                 ? `${record.set_reps?.join(" · ")}회 / 목표 ${record.target_total}×5`
                 : record.workout_type === "pullup"
                   ? `목표 ${record.target_total}회 · ${record.set_count}세트`
@@ -1176,7 +1178,8 @@ function AdminDailyPanel({
         <div className="admin-records" aria-label={`${formatWorkoutDate(workoutDate)} 사용자 기록`}>
           {dailyRecords.map((record) => {
             const isWorkout = record.record_kind === "workout_session";
-            const succeeded = record.workout_type === "recovery_pushup"
+            const isFiveSet = record.workout_type === "recovery_pushup" || record.workout_type === "sunday_pullup";
+            const succeeded = isFiveSet
               ? record.set_reps?.length === 5
                 && record.target_total !== null
                 && record.set_reps.every((reps) => reps >= record.target_total!)
@@ -1194,9 +1197,9 @@ function AdminDailyPanel({
                 </div>
                 {isWorkout ? (
                   <div className="admin-result">
-                    <span>{record.workout_type === "pullup" ? "풀업" : "푸쉬업"}</span>
+                    <span>{record.workout_type === "sunday_pullup" ? "일요일 맨몸 풀업" : record.workout_type === "pullup" ? "풀업" : "푸쉬업"}</span>
                     <strong>
-                      {record.workout_type === "recovery_pushup"
+                      {isFiveSet
                         ? `${record.set_reps?.join(" · ")}회 / 목표 ${record.target_total}×5`
                         : record.workout_type === "pullup"
                         ? `${record.target_total}회 · ${record.set_count}세트`
@@ -1204,7 +1207,7 @@ function AdminDailyPanel({
                     </strong>
                     <em className={succeeded ? "success" : "keep"}>
                       {succeeded
-                        ? record.workout_type === "recovery_pushup" ? "다음 목표 +1/세트" : "다음 목표 +10"
+                        ? isFiveSet ? "다음 목표 +1/세트" : "다음 목표 +10"
                         : "목표 유지"}
                     </em>
                   </div>
@@ -1233,8 +1236,8 @@ function AdminDailyPanel({
       ) : (
         <div className="admin-records admin-history-records" aria-label={`${routine.ko} 전체 주차 기록`}>
           {records.map((record) => {
-            const isRecovery = record.workout_type === "recovery_pushup";
-            const succeeded = isRecovery
+            const isFiveSet = record.workout_type === "recovery_pushup" || record.workout_type === "sunday_pullup";
+            const succeeded = isFiveSet
               ? record.set_reps?.length === 5
                 && record.target_total !== null
                 && record.set_reps.every((reps) => reps >= record.target_total!)
@@ -1245,7 +1248,7 @@ function AdminDailyPanel({
                     && record.target_total !== null
                     && record.total_reps >= record.target_total
                   : true;
-            const result = isRecovery
+            const result = isFiveSet
               ? `${record.set_reps?.join(" · ")}회 / 목표 ${record.target_total}×5`
               : record.workout_type === "pullup"
                 ? `목표 ${record.target_total}회 · ${record.set_count}세트`
@@ -1285,6 +1288,7 @@ function App() {
   const [pushRecords, setPushRecords] = useState<WorkoutSession[]>([]);
   const [pullRecords, setPullRecords] = useState<WorkoutSession[]>([]);
   const [recoveryPushRecords, setRecoveryPushRecords] = useState<WorkoutSession[]>([]);
+  const [sundayPullupRecords, setSundayPullupRecords] = useState<WorkoutSession[]>([]);
   const [completionRecords, setCompletionRecords] = useState<RoutineCompletion[]>([]);
   const [recordsRevision, setRecordsRevision] = useState(0);
   const isAdmin = session?.user.email?.toLowerCase() === ADMIN_EMAIL;
@@ -1295,7 +1299,8 @@ function App() {
   const week = getJourneyWeek(today);
   const pushTarget = nextPushTarget(pushRecords);
   const pullTarget = nextPullTarget(pullRecords);
-  const recoveryPushTarget = nextRecoveryPushTarget(recoveryPushRecords);
+  const recoveryPushTarget = nextFiveSetTarget(recoveryPushRecords, RECOVERY_PUSH_START_TARGET);
+  const sundayPullupTarget = nextFiveSetTarget(sundayPullupRecords, SUNDAY_PULLUP_START_TARGET);
   const visibleDays = useMemo(
     () => Array.from({ length: 7 }, (_, index) => {
       const date = addDays(today, index - 3);
@@ -1304,23 +1309,27 @@ function App() {
       const pushRecord = pushRecords.find((record) => record.workout_date === workoutDate);
       const pullRecord = pullRecords.find((record) => record.workout_date === workoutDate);
       const recoveryPushRecord = recoveryPushRecords.find((record) => record.workout_date === workoutDate);
+      const sundayPullupRecord = sundayPullupRecords.find((record) => record.workout_date === workoutDate);
       const datePushTarget = pushRecord?.target_total ?? pushTarget;
       const datePullTarget = pullRecord?.target_total ?? pullTarget;
       const dateRecoveryPushTarget = recoveryPushRecord?.target_total ?? recoveryPushTarget;
+      const dateSundayPullupTarget = sundayPullupRecord?.target_total ?? sundayPullupTarget;
       const routine = buildRoutines(
         datePushTarget,
         datePullTarget,
         dateRecoveryPushTarget,
+        dateSundayPullupTarget,
         getJourneyWeek(date),
         pushRecord,
         pullRecord,
         recoveryPushRecord,
+        sundayPullupRecord,
       ).find((item) => item.id === routineId);
 
       if (!routine) throw new Error(`Missing routine for ${routineId}`);
       return { date, workoutDate, routine };
     }),
-    [pullRecords, pullTarget, pushRecords, pushTarget, recoveryPushRecords, recoveryPushTarget, today],
+    [pullRecords, pullTarget, pushRecords, pushTarget, recoveryPushRecords, recoveryPushTarget, sundayPullupRecords, sundayPullupTarget, today],
   );
   const selectedDay = visibleDays.find(({ routine }) => routine.id === selectedId) ?? visibleDays[3];
   const selected = selectedDay.routine;
@@ -1359,6 +1368,7 @@ function App() {
       setPushRecords(records.filter((record) => record.workout_type === "pushup"));
       setPullRecords(records.filter((record) => record.workout_type === "pullup"));
       setRecoveryPushRecords(records.filter((record) => record.workout_type === "recovery_pushup"));
+      setSundayPullupRecords(records.filter((record) => record.workout_type === "sunday_pullup"));
     }
     if (!completionResult.error) {
       setCompletionRecords((completionResult.data ?? []) as RoutineCompletion[]);
@@ -1375,6 +1385,7 @@ function App() {
         setPushRecords([]);
         setPullRecords([]);
         setRecoveryPushRecords([]);
+        setSundayPullupRecords([]);
         setCompletionRecords([]);
       }
     });
@@ -1560,10 +1571,21 @@ function App() {
                 />
               )}
               {selected.id === "mon" && !isAdmin && (
-                <RecoveryPushupResultForm
+                <FiveSetProgressForm
+                  workoutType="recovery_pushup"
                   session={session}
                   records={recoveryPushRecords}
                   currentTarget={recoveryPushTarget}
+                  defaultDate={selectedWorkoutDate}
+                  onSaved={loadRecords}
+                />
+              )}
+              {selected.id === "sun" && !isAdmin && (
+                <FiveSetProgressForm
+                  workoutType="sunday_pullup"
+                  session={session}
+                  records={sundayPullupRecords}
+                  currentTarget={sundayPullupTarget}
                   defaultDate={selectedWorkoutDate}
                   onSaved={loadRecords}
                 />
@@ -1598,6 +1620,8 @@ function App() {
                         ? pushRecords
                         : selected.id === "sat"
                           ? pullRecords
+                          : selected.id === "sun"
+                            ? sundayPullupRecords
                           : []
                   }
                   completionRecords={completionRecords}
