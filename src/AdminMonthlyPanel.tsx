@@ -12,7 +12,7 @@ import {
   findProgramVersionForDate,
   type WorkoutProgramVersion,
 } from "./program";
-import { supabase } from "./supabase";
+import { supabase, type WorkoutDetails } from "./supabase";
 
 type AdminMonthlyRecord = {
   user_id: string;
@@ -26,6 +26,7 @@ type AdminMonthlyRecord = {
   total_reps: number | null;
   set_count: number | null;
   set_reps: number[] | null;
+  details: WorkoutDetails | null;
   recorded_at: string | null;
 };
 
@@ -51,15 +52,18 @@ function formatRecordedAt(value: string) {
 
 function recordSummary(record: AdminMonthlyRecord) {
   if (record.record_kind === "routine_completion") {
+    if (record.details?.dips_max_reps !== undefined) {
+      return `딥스 1세트 ${record.details.dips_max_reps}회 · 러닝머신 속도 ${record.details.treadmill_speed}`;
+    }
     return record.routine_id === "tue" ? "휴식 완료 체크" : "루틴 완료 체크";
   }
   if (record.workout_type === "recovery_pushup" || record.workout_type === "sunday_pullup") {
     return `${record.set_reps?.join(" · ") ?? "-"}회 / 목표 ${record.target_total}회 × 5세트`;
   }
   if (record.workout_type === "pullup") {
-    return `목표 ${record.target_total}회 · ${record.set_count ?? "-"}세트`;
+    return `목표 ${record.target_total}회 · ${record.set_count ?? "-"}세트${record.details?.treadmill_speed ? ` · 러닝 속도 ${record.details.treadmill_speed}` : ""}`;
   }
-  return `${record.total_reps ?? "-"} / ${record.target_total ?? "-"}회`;
+  return `${record.total_reps ?? "-"} / ${record.target_total ?? "-"}회${record.set_count ? ` · ${record.set_count}세트` : ""}${record.details?.plank_hold_seconds ? ` · 플랭크 ${record.details.plank_hold_seconds}/${record.details.plank_rest_seconds}초 ${record.details.plank_succeeded ? "성공" : "유지"}` : ""}`;
 }
 
 function recordLabel(record: AdminMonthlyRecord) {
@@ -91,9 +95,11 @@ function outcomeNote(record: AdminMonthlyRecord & { workout_date: string }, outc
       ? `맨몸 5세트 모두 ${record.target_total}회 이상`
       : record.workout_type === "pullup"
         ? `총 ${record.target_total}회 완료 및 ${rule.successSetCount}세트 이내`
-        : `5세트 합계 ${record.target_total}회 이상`;
+        : rule.earlySuccessSetCount
+          ? `합계 ${record.target_total}회 이상(최대 5세트, ${rule.earlySuccessSetCount}세트 이내 조기완료) 또는 플랭크 3세트 성공`
+          : `5세트 합계 ${record.target_total}회 이상`;
   return `프로그램 v${outcome.programVersion.version} 기준은 ${condition}입니다. ${outcome.state === "pr"
-    ? `조건을 충족해 다음 목표가 ${rule.increment}회 증가합니다.`
+    ? "조건을 충족해 다음 해당 목표가 증가합니다."
     : "조건을 충족하지 않아 다음 목표를 유지합니다."}`;
 }
 

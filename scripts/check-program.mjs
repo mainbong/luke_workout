@@ -12,9 +12,12 @@ try {
   await vite.close();
 }
 const {
+  DEFAULT_WORKOUT_PROGRAM_VERSIONS,
   DEFAULT_WORKOUT_PROGRAM_VERSION,
+  GEAR_SECOND_WORKOUT_PROGRAM_VERSION,
   findProgramVersionForDate,
   findProgramVersionForRecord,
+  isGearSecondDate,
   parseWorkoutProgramVersion,
   renderProgramRoutines,
 } = programModule;
@@ -22,11 +25,18 @@ const { nextPushTarget } = progressionModule;
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const program = JSON.parse(read("../src/program.json"));
+const gearSecond = JSON.parse(read("../src/program-gear-second.json"));
 const migration = read("../supabase/migrations/20260901000400_create_workout_program_versions.sql");
+const gearMigration = read("../supabase/migrations/20260901000500_launch_gear_second_v2.sql");
+const identityMigration = read("../supabase/migrations/20260901000600_harden_record_identity.sql");
+const fiveSetMigration = read("../supabase/migrations/20260901000700_require_complete_five_set_records.sql");
 const seed = migration.match(/\$program\$\s*([\s\S]*?)\s*\$program\$/);
 
 assert.ok(seed, "migration must contain a $program$ seed");
 assert.deepEqual(JSON.parse(seed[1]), program, "migration seed must match src/program.json");
+const gearSeed = gearMigration.match(/\$program\$\s*([\s\S]*?)\s*\$program\$/);
+assert.ok(gearSeed, "Gear Second migration must contain a $program$ seed");
+assert.deepEqual(JSON.parse(gearSeed[1]), gearSecond, "Gear Second migration seed must match its source JSON");
 assert.match(migration, /workout_program_versions_metadata_check[\s\S]*?is not distinct from/, "outer and JSON metadata must match");
 assert.match(migration, /New workout records require a program version/, "new records must reject an explicit null version");
 assert.match(migration, /Workout record program version is immutable/, "record provenance must be immutable");
@@ -85,6 +95,53 @@ assert.deepEqual(program.progressions, {
     scope: "user",
   },
 });
+
+assert.ok(parseWorkoutProgramVersion(GEAR_SECOND_WORKOUT_PROGRAM_VERSION), "production parser must accept Gear Second v2");
+assert.deepEqual(DEFAULT_WORKOUT_PROGRAM_VERSIONS.map(({ version }) => version), [2, 1]);
+assert.equal(findProgramVersionForDate(DEFAULT_WORKOUT_PROGRAM_VERSIONS, "2026-09-01")?.version, 1);
+assert.equal(findProgramVersionForDate(DEFAULT_WORKOUT_PROGRAM_VERSIONS, "2026-09-02")?.version, 2);
+assert.equal(isGearSecondDate("2026-09-01"), false);
+assert.equal(isGearSecondDate("2026-09-02"), true);
+assert.deepEqual(gearSecond.days.map(({ id }) => id), ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
+assert.ok(gearSecond.days.every(({ inputs }) => typeof inputs === "string" && inputs.length > 0), "all v2 days declare inputs");
+assert.deepEqual(gearSecond.days.filter(({ completion }) => completion).map(({ id }) => id), ["mon", "tue", "fri", "sat", "sun"]);
+assert.equal(gearSecond.progressions.pullup.routineId, "wed");
+assert.equal(gearSecond.progressions.pushup.earlySuccessSetCount, 4);
+assert.equal(gearSecond.progressions.pushup.earlyIncrement, 20);
+assert.deepEqual(gearSecond.progressions.plank, {
+  routineId: "thu",
+  initialHoldSeconds: 40,
+  initialRestSeconds: 20,
+  holdIncrementSeconds: 10,
+  restIncrementSeconds: 5,
+  setCount: 3,
+  success: "all_sets_completed",
+  failure: "hold",
+  scope: "user",
+});
+assert.equal(gearSecond.progressions.sunday_pullup.initialTarget, 5);
+const gearLinks = gearSecond.days.flatMap((day) => [
+  ...(day.link ? [day.link.url] : []),
+  ...day.exercises.flatMap((exercise) => exercise.guides?.map(({ url }) => url) ?? []),
+]);
+assert.equal(gearLinks.length, 59, "Gear Second must contain all 59 guide links");
+assert.equal(new Set(gearLinks).size, 50, "Gear Second guide link reuse changed");
+const straightArm = gearSecond.days.find(({ id }) => id === "sun").exercises.find(({ name }) => name === "스트레이트 암 풀다운");
+assert.equal(straightArm.prescription, "10회 × 5세트");
+assert.match(straightArm.note, /15회/, "the documented 10/15 rep conflict must remain visible");
+assert.match(gearMigration, /add column details jsonb not null default '\{\}'::jsonb/g);
+assert.match(gearMigration, /workout_type = 'pushup' and \(set_count is null or set_count between 1 and 5\)/);
+assert.match(gearMigration, /0 <= all \(set_reps\)/, "five-set results must reject negative reps at the database boundary");
+assert.match(gearMigration, /alter column program_version_id drop default/g);
+assert.match(gearMigration, /Users can update their own routine completions/);
+assert.match(gearMigration, /create or replace function public\.enforce_record_program_version\(\)[\s\S]*?treadmill_speed[\s\S]*?plank_succeeded[\s\S]*?dips_max_reps/, "Gear Second inputs must be validated by the record trigger");
+assert.match(gearMigration, /expected_dow[\s\S]*?Workout type does not match the Gear Second weekday[\s\S]*?Completion routine does not match the Gear Second weekday/, "Gear Second records must match their weekday");
+assert.match(gearMigration, /details jsonb[\s\S]*?get_admin_monthly_records/);
+assert.match(identityMigration, /Workout record identity is immutable[\s\S]*?Workout type is immutable[\s\S]*?Completion routine is immutable/);
+assert.match(identityMigration, /before update on public\.workout_sessions[\s\S]*?before update on public\.routine_completions/);
+assert.match(fiveSetMigration, /Future records exist with a pre-Gear-Second program version/);
+assert.match(fiveSetMigration, /Existing five-set records are missing set_reps/);
+assert.match(fiveSetMigration, /set_reps is not null[\s\S]*?cardinality\(set_reps\) = 5[\s\S]*?0 <= all \(set_reps\)/);
 
 const storedVersion = { ...DEFAULT_WORKOUT_PROGRAM_VERSION, definition: program };
 const parsedVersion = parseWorkoutProgramVersion(storedVersion);
@@ -190,6 +247,20 @@ const placeholders = {
 };
 const rendered = { ...program, days: renderProgramRoutines(parsedVersion.definition, placeholders) };
 assert.doesNotMatch(JSON.stringify(rendered), /\{\{[^{}]+\}\}/, "unresolved placeholder");
+const renderedGear = renderProgramRoutines(GEAR_SECOND_WORKOUT_PROGRAM_VERSION.definition, {
+  recoveryPushTarget: 15,
+  pushTarget: 100,
+  nextPushTarget: 110,
+  nextPushEarlyTarget: 120,
+  pullTarget: 30,
+  nextPullTarget: 40,
+  sundayPullupTarget: 5,
+  plankHoldSeconds: 40,
+  plankRestSeconds: 20,
+  nextPlankHoldSeconds: 50,
+  nextPlankRestSeconds: 25,
+});
+assert.doesNotMatch(JSON.stringify(renderedGear), /\{\{[^{}]+\}\}/, "unresolved Gear Second placeholder");
 
 const requiredString = (object, field, path) => {
   assert.equal(typeof object[field], "string", `${path}.${field} must be a string`);

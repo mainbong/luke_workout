@@ -104,6 +104,35 @@ assert.equal(unknown.state, "performed");
 assert.equal(unknown.programVersion, null);
 assert.equal(recordOutcome({ ...record(null), record_kind: "routine_completion" }, versions).state, "performed");
 
+const gearVersion = {
+  ...programVersion,
+  id: "gear-v2",
+  version: 2,
+  effective_from: "2026-09-02",
+  definition: {
+    progressions: {
+      ...programVersion.definition.progressions,
+      pushup: { increment: 10, earlyIncrement: 20, earlySuccessSetCount: 4 },
+      plank: { holdIncrementSeconds: 10, restIncrementSeconds: 5 },
+    },
+  },
+};
+const gearPush = (values) => ({
+  ...record("pushup"),
+  workout_date: "2026-09-03",
+  program_version_id: "gear-v2",
+  target_total: 100,
+  details: {},
+  ...values,
+});
+assert.equal(recordOutcome(gearPush({ total_reps: 100, set_count: 4 }), [gearVersion, ...versions]).state, "pr");
+assert.equal(recordOutcome(gearPush({ total_reps: 99, set_count: 5 }), [gearVersion, ...versions]).state, "performed");
+assert.equal(recordOutcome(gearPush({
+  total_reps: 99,
+  set_count: 5,
+  details: { plank_succeeded: true, plank_hold_seconds: 40, plank_rest_seconds: 20 },
+}), [gearVersion, ...versions]).state, "pr");
+
 assert.equal(recordState([], versions), "none");
 assert.equal(recordState([record("pushup", { total_reps: 9 })], versions), "performed");
 assert.equal(recordState([record("pushup", { total_reps: 9 }), recoveryPr], versions), "pr");

@@ -12,6 +12,11 @@ type AchievementRecord = {
   total_reps: number | null;
   set_count: number | null;
   set_reps: number[] | null;
+  details?: {
+    plank_succeeded?: boolean;
+    plank_hold_seconds?: number;
+    plank_rest_seconds?: number;
+  } | null;
 };
 
 export type RecordOutcome = {
@@ -77,9 +82,11 @@ export function recordOutcome(
   let nextTarget = record.target_total;
   if (record.workout_type === "pushup" && record.total_reps !== null) {
     nextTarget = nextPushTarget(
-      [{ target_total: record.target_total, total_reps: record.total_reps }],
+      [{ target_total: record.target_total, total_reps: record.total_reps, set_count: record.set_count }],
       record.target_total,
       rule.increment,
+      rule.earlyIncrement ?? rule.increment,
+      rule.earlySuccessSetCount ?? 0,
     );
   } else if (record.workout_type === "pullup" && record.total_reps !== null) {
     nextTarget = nextPullTarget(
@@ -95,7 +102,12 @@ export function recordOutcome(
       rule.increment,
     );
   }
-  return { state: nextTarget > record.target_total ? "pr" : "performed", programVersion };
+  const plankPr = record.workout_type === "pushup"
+    && Boolean(programVersion.definition.progressions.plank)
+    && record.details?.plank_succeeded === true
+    && Number.isInteger(record.details.plank_hold_seconds)
+    && Number.isInteger(record.details.plank_rest_seconds);
+  return { state: nextTarget > record.target_total || plankPr ? "pr" : "performed", programVersion };
 }
 
 export function recordState(
