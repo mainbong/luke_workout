@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { currentRoutineCompletions, currentWorkoutSessions } from "../src/recordEvents.ts";
-import { nextPushTarget } from "../src/progression.ts";
+import { nextPullTarget, nextPushTarget } from "../src/progression.ts";
 
 const before = {
   id: "00000000-0000-0000-0000-000000000001",
@@ -32,6 +32,31 @@ const currentWorkouts = currentWorkoutSessions(workoutHistory);
 assert.equal(workoutHistory.length, 2, "same-date before and after events must both remain visible");
 assert.deepEqual(currentWorkouts.map(({ id }) => id), [after.id]);
 assert.equal(nextPushTarget(currentWorkouts, 100, 10, 20, 4), 120);
+
+const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
+const legacyProgram = JSON.parse(read("../src/program.json"));
+const gearSecondProgram = JSON.parse(read("../src/program-gear-second.json"));
+const legacyPullup = {
+  ...before,
+  id: "00000000-0000-0000-0000-000000000006",
+  workout_date: "2026-08-29",
+  workout_type: "pullup",
+  program_version_id: "legacy-v1",
+  target_total: 30,
+  total_reps: 30,
+  set_count: 10,
+  updated_at: "2026-08-29T01:00:00Z",
+  is_current: true,
+};
+assert.equal(legacyProgram.progressions.pullup.routineId, "sat");
+assert.equal(gearSecondProgram.progressions.pullup.routineId, "wed");
+assert.equal(nextPullTarget(
+  currentWorkoutSessions([legacyPullup]).filter(({ workout_date, workout_type }) =>
+    workout_type === "pullup" && workout_date < gearSecondProgram.effectiveFrom),
+  gearSecondProgram.progressions.pullup.initialTarget,
+  legacyProgram.progressions.pullup.increment,
+  legacyProgram.progressions.pullup.successSetCount,
+), 40);
 
 const completed = {
   id: "00000000-0000-0000-0000-000000000003",
@@ -71,6 +96,22 @@ assert.deepEqual(
 const migration = readFileSync(
   new URL("../supabase/migrations/20260901000800_preserve_record_event_history.sql", import.meta.url),
   "utf8",
+);
+const lineageMigration = read("../supabase/migrations/20260902000000_map_admin_routine_history_by_lineage.sql");
+const workoutMappingSql = lineageMigration.match(
+  /where workout\.workout_type = case target_routine_id([\s\S]*?)\n\s*end/,
+)?.[1];
+assert.ok(workoutMappingSql, "admin workout lineage mapping is required");
+assert.deepEqual(
+  Object.fromEntries([...workoutMappingSql.matchAll(/when '(\w+)' then '(\w+)'/g)]
+    .map(([, routineId, workoutType]) => [routineId, workoutType])),
+  { mon: "recovery_pushup", wed: "pullup", thu: "pushup", sun: "sunday_pullup" },
+);
+assert.match(lineageMigration, /where completion\.routine_id = target_routine_id/);
+assert.doesNotMatch(lineageMigration, /extract\s*\(\s*dow\s+from workout\.workout_date\s*\)/i);
+assert.doesNotMatch(
+  lineageMigration,
+  /\b(?:update|delete)\s+public\.(?:workout_sessions|routine_completions)\b/i,
 );
 assert.match(migration, /drop constraint workout_sessions_user_id_workout_date_workout_type_key/);
 assert.match(migration, /drop constraint routine_completions_user_id_workout_date_routine_id_key/);
