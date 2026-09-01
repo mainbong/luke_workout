@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
+import { AdminMonthlyPanel } from "./AdminMonthlyPanel";
 import { countMissionWorkoutDays, fiveSetSucceeded, nextFiveSetTarget } from "./progression";
 import {
   isSupabaseConfigured,
@@ -1305,6 +1306,16 @@ function App() {
   const pullTarget = nextPullTarget(pullRecords);
   const recoveryPushTarget = nextFiveSetTarget(recoveryPushRecords, RECOVERY_PUSH_START_TARGET);
   const sundayPullupTarget = nextFiveSetTarget(sundayPullupRecords, SUNDAY_PULLUP_START_TARGET);
+  const adminRoutines = useMemo(
+    () => buildRoutines(
+      PUSH_START_TARGET,
+      PULL_START_TARGET,
+      RECOVERY_PUSH_START_TARGET,
+      SUNDAY_PULLUP_START_TARGET,
+      week,
+    ).map(({ id, ko, title }) => ({ id, ko, title })),
+    [week],
+  );
   const progressEndDate = toDateInputValue(today) < END_DATE ? toDateInputValue(today) : END_DATE;
   const completedDays = countMissionWorkoutDays(
     [...pushRecords, ...pullRecords, ...recoveryPushRecords, ...sundayPullupRecords, ...completionRecords],
@@ -1520,6 +1531,7 @@ function App() {
             <button type="button" onClick={() => setAuthNotice("")} aria-label="로그인 알림 닫기">×</button>
           </div>
         )}
+        {isAdmin && <AdminMonthlyPanel routines={adminRoutines} />}
         <section className="week-section" aria-labelledby="week-title">
           <div className="week-heading">
             <div>
