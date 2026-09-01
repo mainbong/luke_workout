@@ -1,4 +1,23 @@
+import { findProgramVersionForRecord, type WorkoutProgramVersion } from "./program";
+import { nextFiveSetTarget, nextPullTarget, nextPushTarget } from "./progression";
+
 const ROUTINE_IDS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+
+type AchievementRecord = {
+  workout_date: string;
+  record_kind: "workout_session" | "routine_completion";
+  workout_type: "pushup" | "pullup" | "recovery_pushup" | "sunday_pullup" | null;
+  program_version_id: string | null;
+  target_total: number | null;
+  total_reps: number | null;
+  set_count: number | null;
+  set_reps: number[] | null;
+};
+
+export type RecordOutcome = {
+  state: "performed" | "pr";
+  programVersion: WorkoutProgramVersion | null;
+};
 
 function parseMonth(monthValue: string) {
   const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(monthValue);
@@ -42,10 +61,49 @@ export function routineIdForDate(dateValue: string): "sun" | "mon" | "tue" | "we
   return ROUTINE_IDS[date.getUTCDay()];
 }
 
+export function recordOutcome(
+  record: AchievementRecord,
+  programVersions: readonly WorkoutProgramVersion[],
+): RecordOutcome {
+  const programVersion = record.program_version_id
+    ? findProgramVersionForRecord(programVersions, record)
+    : null;
+  if (record.record_kind === "routine_completion"
+    || !programVersion
+    || !record.workout_type
+    || record.target_total === null) {
+    return { state: "performed", programVersion };
+  }
+
+  const rule = programVersion.definition.progressions[record.workout_type];
+  let nextTarget = record.target_total;
+  if (record.workout_type === "pushup" && record.total_reps !== null) {
+    nextTarget = nextPushTarget(
+      [{ target_total: record.target_total, total_reps: record.total_reps }],
+      record.target_total,
+      rule.increment,
+    );
+  } else if (record.workout_type === "pullup" && record.total_reps !== null) {
+    nextTarget = nextPullTarget(
+      [{ target_total: record.target_total, total_reps: record.total_reps, set_count: record.set_count }],
+      record.target_total,
+      rule.increment,
+      rule.successSetCount ?? 0,
+    );
+  } else if (record.workout_type === "recovery_pushup" || record.workout_type === "sunday_pullup") {
+    nextTarget = nextFiveSetTarget(
+      [{ target_total: record.target_total, set_reps: record.set_reps }],
+      record.target_total,
+      rule.increment,
+    );
+  }
+  return { state: nextTarget > record.target_total ? "pr" : "performed", programVersion };
+}
+
 export function recordState(
-  records: Array<{ record_kind: "workout_session" | "routine_completion" }>,
-): "none" | "result" | "completion" | "both" {
-  const result = records.some(({ record_kind }) => record_kind === "workout_session");
-  const completion = records.some(({ record_kind }) => record_kind === "routine_completion");
-  return result ? (completion ? "both" : "result") : completion ? "completion" : "none";
+  records: AchievementRecord[],
+  programVersions: readonly WorkoutProgramVersion[],
+): "none" | "performed" | "pr" {
+  if (records.some((record) => recordOutcome(record, programVersions).state === "pr")) return "pr";
+  return records.length > 0 ? "performed" : "none";
 }
