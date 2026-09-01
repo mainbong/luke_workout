@@ -33,6 +33,12 @@ export type WorkoutSession = {
   set_reps: number[] | null;
   details: WorkoutDetails;
   created_at: string;
+  updated_at: string;
+};
+
+export type WorkoutSessionEvent = WorkoutSession & {
+  event_order: number | null;
+  is_current: boolean;
 };
 
 export type RoutineCompletion = {
@@ -42,6 +48,12 @@ export type RoutineCompletion = {
   program_version_id: string | null;
   details: WorkoutDetails;
   completed_at: string;
+};
+
+export type RoutineCompletionEvent = RoutineCompletion & {
+  event_order: number | null;
+  is_completed: boolean;
+  is_current: boolean;
 };
 
 export type AdminDailyRecord = {
@@ -61,5 +73,9 @@ export type AdminDailyRecord = {
 };
 
 export type AdminRoutineHistoryRecord = AdminDailyRecord & {
+  event_id: string;
+  event_order: number | null;
   workout_date: string;
+  is_completed: boolean | null;
+  is_current: boolean;
 };
