@@ -7,13 +7,12 @@ import {
   seoulMonthValue,
   shiftMonth,
 } from "./adminCalendar";
+import {
+  findProgramVersionForDate,
+  findProgramVersionForRecord,
+  type WorkoutProgramVersion,
+} from "./program";
 import { supabase } from "./supabase";
-
-type RoutineSummary = {
-  id: string;
-  ko: string;
-  title?: string;
-};
 
 type AdminMonthlyRecord = {
   user_id: string;
@@ -22,6 +21,7 @@ type AdminMonthlyRecord = {
   record_kind: "workout_session" | "routine_completion" | null;
   routine_id: string | null;
   workout_type: "pushup" | "pullup" | "recovery_pushup" | "sunday_pullup" | null;
+  program_version_id: string | null;
   target_total: number | null;
   total_reps: number | null;
   set_count: number | null;
@@ -70,7 +70,7 @@ function recordLabel(record: AdminMonthlyRecord) {
   return "푸쉬업 결과";
 }
 
-export function AdminMonthlyPanel({ routines }: { routines: RoutineSummary[] }) {
+export function AdminMonthlyPanel({ programVersions }: { programVersions: WorkoutProgramVersion[] }) {
   const initialMonth = seoulMonthValue();
   const [month, setMonth] = useState(initialMonth);
   const [selectedDate, setSelectedDate] = useState(`${initialMonth}-01`);
@@ -134,7 +134,9 @@ export function AdminMonthlyPanel({ routines }: { routines: RoutineSummary[] }) 
     return grouped;
   }, [userRecords]);
   const selectedRecords = recordsByDate.get(selectedDate) ?? [];
-  const selectedRoutine = routines.find((routine) => routine.id === routineIdForDate(selectedDate));
+  const routineForDate = (date: string) => findProgramVersionForDate(programVersions, date)
+    ?.definition.days.find((routine) => routine.id === routineIdForDate(date));
+  const selectedRoutine = routineForDate(selectedDate);
   const selectedUser = users.find((user) => user.id === selectedUserId);
 
   function changeMonth(nextMonth: string) {
@@ -210,7 +212,7 @@ export function AdminMonthlyPanel({ routines }: { routines: RoutineSummary[] }) 
                 if (!cell) return <span className="admin-calendar-blank" key={`blank-${index}`} aria-hidden="true" />;
                 const dayRecords = recordsByDate.get(cell.date) ?? [];
                 const state = recordState(dayRecords);
-                const routine = routines.find((item) => item.id === routineIdForDate(cell.date));
+                const routine = routineForDate(cell.date);
                 const stateLabel = state === "both"
                   ? "결과와 완료 기록 있음"
                   : state === "result"
@@ -253,13 +255,19 @@ export function AdminMonthlyPanel({ routines }: { routines: RoutineSummary[] }) 
               </div>
             ) : (
               <div className="admin-calendar-records">
-                {selectedRecords.map((record) => (
-                  <article key={`${record.record_kind}-${record.recorded_at}`}>
-                    <span>{recordLabel(record)}</span>
-                    <strong>{recordSummary(record)}</strong>
-                    <small>{record.recorded_at ? `${formatRecordedAt(record.recorded_at)} 저장` : ""}</small>
-                  </article>
-                ))}
+                {selectedRecords.map((record) => {
+                  const recordProgramVersion = findProgramVersionForRecord(programVersions, record);
+                  const programLabel = recordProgramVersion
+                    ? `프로그램 v${recordProgramVersion.version}`
+                    : record.program_version_id ? "프로그램 버전 확인 필요" : "프로그램 버전 없음";
+                  return (
+                    <article key={`${record.record_kind}-${record.recorded_at}`}>
+                      <span>{recordLabel(record)}</span>
+                      <strong>{recordSummary(record)}</strong>
+                      <small>{record.recorded_at ? `${formatRecordedAt(record.recorded_at)} 저장 · ${programLabel}` : programLabel}</small>
+                    </article>
+                  );
+                })}
               </div>
             )}
           </section>

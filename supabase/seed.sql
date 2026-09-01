@@ -1,0 +1,1 @@
+-- Canonical application seeds live in versioned migrations so production and local resets match.

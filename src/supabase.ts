@@ -18,6 +18,7 @@ export type WorkoutSession = {
   id: string;
   workout_date: string;
   workout_type: "pushup" | "pullup" | "recovery_pushup" | "sunday_pullup";
+  program_version_id: string | null;
   target_total: number;
   total_reps: number;
   set_count: number | null;
@@ -29,6 +30,7 @@ export type RoutineCompletion = {
   id: string;
   workout_date: string;
   routine_id: string;
+  program_version_id: string | null;
   completed_at: string;
 };
 
