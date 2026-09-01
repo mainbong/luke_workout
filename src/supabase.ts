@@ -14,6 +14,14 @@ export const supabase = isSupabaseConfigured
     })
   : null;
 
+export type WorkoutDetails = {
+  treadmill_speed?: number;
+  plank_succeeded?: boolean;
+  plank_hold_seconds?: number;
+  plank_rest_seconds?: number;
+  dips_max_reps?: number;
+};
+
 export type WorkoutSession = {
   id: string;
   workout_date: string;
@@ -23,6 +31,7 @@ export type WorkoutSession = {
   total_reps: number;
   set_count: number | null;
   set_reps: number[] | null;
+  details: WorkoutDetails;
   created_at: string;
 };
 
@@ -31,6 +40,7 @@ export type RoutineCompletion = {
   workout_date: string;
   routine_id: string;
   program_version_id: string | null;
+  details: WorkoutDetails;
   completed_at: string;
 };
 
@@ -41,10 +51,12 @@ export type AdminDailyRecord = {
   record_kind: "workout_session" | "routine_completion";
   routine_id: string | null;
   workout_type: "pushup" | "pullup" | "recovery_pushup" | "sunday_pullup" | null;
+  program_version_id: string | null;
   target_total: number | null;
   total_reps: number | null;
   set_count: number | null;
   set_reps?: number[] | null;
+  details: WorkoutDetails;
   recorded_at: string;
 };
 

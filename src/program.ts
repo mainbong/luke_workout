@@ -1,4 +1,5 @@
 import defaultDefinition from "./program.json";
+import gearSecondDefinition from "./program-gear-second.json";
 
 export type Exercise = {
   name: string;
@@ -17,6 +18,8 @@ export type Routine = {
   category?: string;
   summary?: string;
   target?: string;
+  inputs?: string;
+  completion?: boolean;
   record?: string;
   exercises?: Exercise[];
   link?: { label: string; url: string };
@@ -29,6 +32,20 @@ export type ProgressionRule = {
   setCount?: number;
   successSetCount?: number;
   success: string;
+  failure: "hold";
+  scope: "user";
+  earlySuccessSetCount?: number;
+  earlyIncrement?: number;
+};
+
+export type PlankProgressionRule = {
+  routineId: "thu";
+  initialHoldSeconds: number;
+  initialRestSeconds: number;
+  holdIncrementSeconds: number;
+  restIncrementSeconds: number;
+  setCount: number;
+  success: "all_sets_completed";
   failure: "hold";
   scope: "user";
 };
@@ -50,6 +67,7 @@ export type ProgramDefinition = {
     pushup: ProgressionRule;
     pullup: ProgressionRule;
     sunday_pullup: ProgressionRule;
+    plank?: PlankProgressionRule;
   };
   days: Routine[];
 };
@@ -72,13 +90,33 @@ export const DEFAULT_WORKOUT_PROGRAM_VERSION: WorkoutProgramVersion = {
   definition: defaultDefinition as ProgramDefinition,
 };
 
+export const GEAR_SECOND_EFFECTIVE_DATE = "2026-09-02";
+
+export function isGearSecondDate(date: string) {
+  return date >= GEAR_SECOND_EFFECTIVE_DATE;
+}
+
+export const GEAR_SECOND_WORKOUT_PROGRAM_VERSION: WorkoutProgramVersion = {
+  id: "luke-weekly-2026-09-02",
+  program_key: "luke-weekly",
+  version: 2,
+  effective_from: GEAR_SECOND_EFFECTIVE_DATE,
+  source_url: "https://app.notion.com/p/3cebe971bff78144884ffe8cc7623006",
+  definition: gearSecondDefinition as ProgramDefinition,
+};
+
+export const DEFAULT_WORKOUT_PROGRAM_VERSIONS = [
+  GEAR_SECOND_WORKOUT_PROGRAM_VERSION,
+  DEFAULT_WORKOUT_PROGRAM_VERSION,
+];
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const DAY_IDS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 
-function isPositiveInteger(value: unknown) {
+function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
@@ -101,8 +139,9 @@ function isRoutine(value: unknown) {
     && typeof value.ko === "string"
     && (value.status === "pending" || value.status === "ready")
     && typeof value.short === "string"
-    && ["title", "category", "summary", "target", "record"]
+    && ["title", "category", "summary", "target", "inputs", "record"]
       .every((field) => value[field] === undefined || typeof value[field] === "string")
+    && (value.completion === undefined || typeof value.completion === "boolean")
     && (value.exercises === undefined || (Array.isArray(value.exercises) && value.exercises.every(isExercise)))
     && (value.link === undefined || isLink(value.link));
 }
@@ -113,6 +152,19 @@ function isProgressionRule(value: unknown, routineId: string, success: string) {
     && isPositiveInteger(value.initialTarget)
     && isPositiveInteger(value.increment)
     && value.success === success
+    && value.failure === "hold"
+    && value.scope === "user";
+}
+
+function isPlankProgressionRule(value: unknown) {
+  return isObject(value)
+    && value.routineId === "thu"
+    && isPositiveInteger(value.initialHoldSeconds)
+    && isPositiveInteger(value.initialRestSeconds)
+    && isPositiveInteger(value.holdIncrementSeconds)
+    && isPositiveInteger(value.restIncrementSeconds)
+    && isPositiveInteger(value.setCount)
+    && value.success === "all_sets_completed"
     && value.failure === "hold"
     && value.scope === "user";
 }
@@ -130,10 +182,19 @@ export function isProgramDefinition(value: unknown): value is ProgramDefinition 
     || !isObject(progressions.recovery_pushup) || progressions.recovery_pushup.setCount !== 5
     || !isProgressionRule(progressions.pushup, "thu", "total_reps_at_or_above_target")
     || !isObject(progressions.pushup) || progressions.pushup.setCount !== 5
-    || !isProgressionRule(progressions.pullup, "sat", "target_completed_at_or_below_set_count")
+    || (progressions.pushup.earlySuccessSetCount !== undefined
+      && (!isPositiveInteger(progressions.pushup.earlySuccessSetCount)
+        || progressions.pushup.earlySuccessSetCount >= progressions.pushup.setCount))
+    || (progressions.pushup.earlyIncrement !== undefined
+      && !isPositiveInteger(progressions.pushup.earlyIncrement))
+    || ((progressions.pushup.earlySuccessSetCount === undefined)
+      !== (progressions.pushup.earlyIncrement === undefined))
+    || !(isProgressionRule(progressions.pullup, "sat", "target_completed_at_or_below_set_count")
+      || isProgressionRule(progressions.pullup, "wed", "target_completed_at_or_below_set_count"))
     || !isObject(progressions.pullup) || !isPositiveInteger(progressions.pullup.successSetCount)
     || !isProgressionRule(progressions.sunday_pullup, "sun", "all_sets_unassisted_at_or_above_target")
-    || !isObject(progressions.sunday_pullup) || progressions.sunday_pullup.setCount !== 5) return false;
+    || !isObject(progressions.sunday_pullup) || progressions.sunday_pullup.setCount !== 5
+    || (progressions.plank !== undefined && !isPlankProgressionRule(progressions.plank))) return false;
   const days = value.days;
   if (!Array.isArray(days) || days.length !== 7 || !days.every(isRoutine)) return false;
   return DAY_IDS.every((id) => days.some((day) => isObject(day) && day.id === id));

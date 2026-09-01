@@ -15,26 +15,30 @@ import {
 import { AdminMonthlyPanel } from "./AdminMonthlyPanel";
 import {
   countMissionWorkoutDays,
-  fiveSetSucceeded,
   nextFiveSetTarget,
+  nextPlankTarget,
   nextPullTarget,
   nextPushTarget,
 } from "./progression";
 import {
+  DEFAULT_WORKOUT_PROGRAM_VERSIONS,
   DEFAULT_WORKOUT_PROGRAM_VERSION,
   findProgramVersionForDate,
   findProgramVersionForRecord,
+  isGearSecondDate,
   parseWorkoutProgramVersion,
   renderProgramRoutines,
   type ProgramDefinition,
   type Routine,
   type WorkoutProgramVersion,
 } from "./program";
+import { recordOutcome, routineIdForDate } from "./adminCalendar";
 import {
   isSupabaseConfigured,
   supabase,
   type AdminRoutineHistoryRecord,
   type RoutineCompletion,
+  type WorkoutDetails,
   type WorkoutSession,
 } from "./supabase";
 
@@ -100,8 +104,13 @@ function buildRoutines(
   pullTarget: number,
   recoveryPushTarget: number,
   sundayPullupTarget: number,
+  plankHoldSeconds: number,
+  plankRestSeconds: number,
   pushIncrement: number,
   pullIncrement: number,
+  pushEarlyIncrement: number,
+  plankHoldIncrement: number,
+  plankRestIncrement: number,
   latestPushRecord?: WorkoutSession,
   latestPullRecord?: WorkoutSession,
   latestRecoveryPushRecord?: WorkoutSession,
@@ -110,10 +119,15 @@ function buildRoutines(
   const routines = renderProgramRoutines(definition, {
     pushTarget,
     nextPushTarget: pushTarget + pushIncrement,
+    nextPushEarlyTarget: pushTarget + pushEarlyIncrement,
     pullTarget,
     nextPullTarget: pullTarget + pullIncrement,
     recoveryPushTarget,
     sundayPullupTarget,
+    plankHoldSeconds,
+    plankRestSeconds,
+    nextPlankHoldSeconds: plankHoldSeconds + plankHoldIncrement,
+    nextPlankRestSeconds: plankRestSeconds + plankRestIncrement,
   });
   const records: Record<string, string | undefined> = {
     mon: latestRecoveryPushRecord
@@ -122,7 +136,7 @@ function buildRoutines(
     thu: latestPushRecord
       ? `${formatWorkoutDate(latestPushRecord.workout_date)} 최근 기록 · ${latestPushRecord.total_reps} / ${latestPushRecord.target_total}회`
       : undefined,
-    sat: latestPullRecord
+    [definition.progressions.pullup.routineId]: latestPullRecord
       ? `${formatWorkoutDate(latestPullRecord.workout_date)} 최근 기록 · ${latestPullRecord.total_reps} / ${latestPullRecord.target_total}회 · ${latestPullRecord.set_count}세트`
       : undefined,
     sun: latestSundayPullupRecord
@@ -154,6 +168,10 @@ function WorkoutResultForm({
   const [workoutDate, setWorkoutDate] = useState(defaultDate);
   const [totalReps, setTotalReps] = useState("");
   const [setCount, setSetCount] = useState("");
+  const [treadmillSpeed, setTreadmillSpeed] = useState("");
+  const [plankSucceeded, setPlankSucceeded] = useState(false);
+  const [plankHoldSeconds, setPlankHoldSeconds] = useState("");
+  const [plankRestSeconds, setPlankRestSeconds] = useState("");
   const [message, setMessage] = useState(initialMessage ?? "");
   const [busy, setBusy] = useState(false);
   const savedRecord = records.find((record) => record.workout_date === workoutDate);
@@ -162,9 +180,16 @@ function WorkoutResultForm({
     ? findProgramVersionForRecord(programVersions, savedRecord)
     : dateProgramVersion;
   const recordVersionMissing = Boolean(savedRecord?.program_version_id && !recordProgramVersion);
+  const activeProgramVersion = recordProgramVersion ?? dateProgramVersion ?? DEFAULT_WORKOUT_PROGRAM_VERSION;
   const progressionRule = isPullup
-    ? (recordProgramVersion ?? dateProgramVersion ?? DEFAULT_WORKOUT_PROGRAM_VERSION).definition.progressions.pullup
-    : (recordProgramVersion ?? dateProgramVersion ?? DEFAULT_WORKOUT_PROGRAM_VERSION).definition.progressions.pushup;
+    ? activeProgramVersion.definition.progressions.pullup
+    : activeProgramVersion.definition.progressions.pushup;
+  const plankRule = isPullup ? undefined : activeProgramVersion.definition.progressions.plank;
+  const needsTreadmillSpeed = isPullup && progressionRule.routineId === "wed";
+  const needsPushSetCount = !isPullup && progressionRule.earlySuccessSetCount !== undefined;
+  const needsSetCount = isPullup || needsPushSetCount;
+  const routineDayName = activeProgramVersion.definition.days
+    .find((routine) => routine.id === progressionRule.routineId)?.ko ?? progressionRule.routineId;
   const priorRecords = records.filter((record) => record.workout_date < workoutDate);
   const priorRecord = priorRecords[0];
   const priorProgramVersion = priorRecord
@@ -190,7 +215,27 @@ function WorkoutResultForm({
             priorRecords,
             progressionRule.initialTarget,
             priorRule.increment,
+            priorRule.earlyIncrement ?? priorRule.increment,
+            priorRule.earlySuccessSetCount ?? 0,
           ));
+  const priorPlankRule = priorProgramVersion?.definition.progressions.plank ?? plankRule;
+  const savedPlankDetails = savedRecord?.details;
+  const currentPlankTarget = plankRule
+    ? savedPlankDetails
+      && Number.isInteger(savedPlankDetails.plank_hold_seconds)
+      && Number.isInteger(savedPlankDetails.plank_rest_seconds)
+        ? {
+            holdSeconds: savedPlankDetails.plank_hold_seconds!,
+            restSeconds: savedPlankDetails.plank_rest_seconds!,
+          }
+        : nextPlankTarget(
+            priorRecords,
+            plankRule.initialHoldSeconds,
+            plankRule.initialRestSeconds,
+            priorPlankRule?.holdIncrementSeconds ?? plankRule.holdIncrementSeconds,
+            priorPlankRule?.restIncrementSeconds ?? plankRule.restIncrementSeconds,
+          )
+    : null;
 
   useEffect(() => {
     if (initialMessage) setMessage(initialMessage);
@@ -200,11 +245,19 @@ function WorkoutResultForm({
     if (savedRecord) {
       setTotalReps(String(savedRecord.total_reps));
       setSetCount(savedRecord.set_count === null ? "" : String(savedRecord.set_count));
+      setTreadmillSpeed(savedRecord.details.treadmill_speed?.toString() ?? "");
+      setPlankSucceeded(savedRecord.details.plank_succeeded ?? false);
+      setPlankHoldSeconds(savedRecord.details.plank_hold_seconds?.toString() ?? "");
+      setPlankRestSeconds(savedRecord.details.plank_rest_seconds?.toString() ?? "");
     } else {
       setTotalReps("");
       setSetCount("");
+      setTreadmillSpeed("");
+      setPlankSucceeded(false);
+      setPlankHoldSeconds(currentPlankTarget?.holdSeconds.toString() ?? "");
+      setPlankRestSeconds(currentPlankTarget?.restSeconds.toString() ?? "");
     }
-  }, [isPullup, savedRecord, workoutDate]);
+  }, [currentPlankTarget?.holdSeconds, currentPlankTarget?.restSeconds, isPullup, savedRecord, workoutDate]);
 
   async function sendMagicLink(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -226,15 +279,17 @@ function WorkoutResultForm({
   async function saveResult(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!supabase || !session) return;
-    const sets = isPullup ? Number(setCount) : null;
+    const sets = needsSetCount ? Number(setCount) : null;
     if (isPullup && (!Number.isInteger(sets) || sets === null || sets < 1)) {
       setMessage("풀업 완료 세트 수는 1 이상의 정수로 입력해주세요.");
       return;
     }
-    const workoutDay = new Date(`${workoutDate}T00:00:00+09:00`).getDay();
-    const expectedDay = isPullup ? 6 : 4;
-    if (workoutDay !== expectedDay) {
-      setMessage(`${isPullup ? "풀업" : "푸쉬업"} 기록은 ${isPullup ? "토요일" : "목요일"} 날짜로 입력해주세요.`);
+    if (needsPushSetCount && (!Number.isInteger(sets) || sets === null || sets < 1 || sets > 5)) {
+      setMessage("푸쉬업 완료 세트 수는 1~5 사이의 정수로 입력해주세요.");
+      return;
+    }
+    if (routineIdForDate(workoutDate) !== progressionRule.routineId) {
+      setMessage(`${isPullup ? "풀업" : "푸쉬업"} 기록은 ${routineDayName} 날짜로 입력해주세요.`);
       return;
     }
 
@@ -250,10 +305,33 @@ function WorkoutResultForm({
       setMessage("합계는 0 이상의 정수로 입력해주세요.");
       return;
     }
+    const speed = needsTreadmillSpeed ? Number(treadmillSpeed) : undefined;
+    if (needsTreadmillSpeed && (!Number.isFinite(speed) || speed! < 7)) {
+      setMessage("러닝머신 유지 속도는 7 이상으로 입력해주세요.");
+      return;
+    }
+    const holdSeconds = plankRule ? Number(plankHoldSeconds) : undefined;
+    const restSeconds = plankRule ? Number(plankRestSeconds) : undefined;
+    if (plankRule && (
+      !Number.isInteger(holdSeconds) || holdSeconds! < 1
+      || !Number.isInteger(restSeconds) || restSeconds! < 1
+    )) {
+      setMessage("플랭크 Hold와 휴식 시간은 1초 이상의 정수로 입력해주세요.");
+      return;
+    }
 
     setBusy(true);
     setMessage("");
-    const values = { target_total: target, total_reps: reps, set_count: sets };
+    const details: WorkoutDetails = {
+      ...(existing?.details ?? {}),
+      ...(needsTreadmillSpeed ? { treadmill_speed: speed } : {}),
+      ...(plankRule ? {
+        plank_succeeded: plankSucceeded,
+        plank_hold_seconds: holdSeconds,
+        plank_rest_seconds: restSeconds,
+      } : {}),
+    };
+    const values = { target_total: target, total_reps: reps, set_count: sets, details };
     const { error } = existing
       ? await supabase.from("workout_sessions").update(values).eq("id", existing.id)
       : await supabase.from("workout_sessions").insert({
@@ -271,11 +349,24 @@ function WorkoutResultForm({
       if (recordVersionMissing) {
         setMessage("저장 완료 · 연결된 프로그램 버전 확인 필요");
       } else {
-        const succeeded = isPullup
-          ? sets !== null && sets <= successSetCount
-          : reps >= target;
-        const followingTarget = succeeded ? target + targetIncrement : target;
-        setMessage(`저장 완료 · 다음 목표 ${followingTarget}회`);
+        const followingTarget = isPullup
+          ? nextPullTarget(
+              [{ target_total: target, total_reps: reps, set_count: sets }],
+              target,
+              progressionRule.increment,
+              successSetCount,
+            )
+          : nextPushTarget(
+              [{ target_total: target, total_reps: reps, set_count: sets }],
+              target,
+              progressionRule.increment,
+              progressionRule.earlyIncrement ?? progressionRule.increment,
+              progressionRule.earlySuccessSetCount ?? 0,
+            );
+        const plankMessage = plankRule && currentPlankTarget
+          ? ` · 플랭크 다음 ${currentPlankTarget.holdSeconds + (plankSucceeded ? plankRule.holdIncrementSeconds : 0)}/${currentPlankTarget.restSeconds + (plankSucceeded ? plankRule.restIncrementSeconds : 0)}초`
+          : "";
+        setMessage(`저장 완료 · 다음 목표 ${followingTarget}회${plankMessage}`);
       }
     }
     setBusy(false);
@@ -335,65 +426,110 @@ function WorkoutResultForm({
       <div className="result-heading">
         <div>
           <p className="eyebrow dark">RESULT LOG</p>
-          <h3 id="result-title">{isPullup ? "토요일 풀업 결과 입력" : "목요일 푸쉬업 결과 입력"}</h3>
+          <h3 id="result-title">{routineDayName} {isPullup ? "풀업" : "푸쉬업"} 결과 입력</h3>
           <p>
             {recordVersionMissing
               ? "저장된 목표와 결과만 수정할 수 있으며 다음 목표는 프로그램 버전을 확인한 뒤 계산합니다."
               : isPullup
                 ? "목표 횟수를 완료하는 데 사용한 세트 수를 적으면 다음 목표를 자동 계산합니다."
-                : "5세트의 합계만 적으면 다음 목표를 자동 계산합니다."}
+                : needsPushSetCount
+                  ? "푸쉬업 합계와 완료 세트 수, 플랭크 결과를 적으면 다음 목표를 자동 계산합니다."
+                  : "5세트의 합계만 적으면 다음 목표를 자동 계산합니다."}
           </p>
         </div>
         <button className="text-button" type="button" onClick={signOut}>
           <LogOut size={14} aria-hidden="true" /> 로그아웃
         </button>
       </div>
-      <form className={`result-form ${isPullup ? "pullup" : ""}`} onSubmit={saveResult}>
-        <label>
-          운동 날짜
-          <input
-            type="date"
-            min="2026-07-23"
-            max={END_DATE}
-            value={workoutDate}
-            onChange={(event) => setWorkoutDate(event.target.value)}
-            required
-          />
-        </label>
-        {!isPullup && (
+      <form className="recovery-result-form" onSubmit={saveResult}>
+        <div className="record-inputs">
           <label>
-            5세트 합계
-            <span className="number-input">
-              <input
-                type="number"
-                min="0"
-                step="1"
-                inputMode="numeric"
-                value={totalReps}
-                onChange={(event) => setTotalReps(event.target.value)}
-                required
-              />
-              <span>회</span>
-            </span>
+            운동 날짜
+            <input
+              type="date"
+              min="2026-07-23"
+              max={END_DATE}
+              value={workoutDate}
+              onChange={(event) => setWorkoutDate(event.target.value)}
+              required
+            />
           </label>
-        )}
-        {isPullup && (
-          <label>
-            완료 세트 수
-            <span className="number-input">
-              <input
-                type="number"
-                min="1"
-                step="1"
-                inputMode="numeric"
-                value={setCount}
-                onChange={(event) => setSetCount(event.target.value)}
-                required
-              />
-              <span>세트</span>
-            </span>
-          </label>
-        )}
+          {!isPullup && (
+            <label>
+              푸쉬업 전체 합계
+              <span className="number-input">
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  inputMode="numeric"
+                  value={totalReps}
+                  onChange={(event) => setTotalReps(event.target.value)}
+                  required
+                />
+                <span>회</span>
+              </span>
+            </label>
+          )}
+          {needsSetCount && (
+            <label>
+              목표 완료 세트 수
+              <span className="number-input">
+                <input
+                  type="number"
+                  min="1"
+                  max={needsPushSetCount ? 5 : undefined}
+                  step="1"
+                  inputMode="numeric"
+                  value={setCount}
+                  onChange={(event) => setSetCount(event.target.value)}
+                  required
+                />
+                <span>세트</span>
+              </span>
+            </label>
+          )}
+          {needsTreadmillSpeed && (
+            <label>
+              러닝머신 15분 유지 속도
+              <span className="number-input">
+                <input
+                  type="number"
+                  min="7"
+                  step="0.1"
+                  inputMode="decimal"
+                  value={treadmillSpeed}
+                  onChange={(event) => setTreadmillSpeed(event.target.value)}
+                  required
+                />
+                <span>속도</span>
+              </span>
+            </label>
+          )}
+          {plankRule && (
+            <>
+              <label>
+                플랭크 Hold
+                <span className="number-input">
+                  <input type="number" min="1" step="1" inputMode="numeric" value={plankHoldSeconds} onChange={(event) => setPlankHoldSeconds(event.target.value)} required />
+                  <span>초</span>
+                </span>
+              </label>
+              <label>
+                플랭크 휴식
+                <span className="number-input">
+                  <input type="number" min="1" step="1" inputMode="numeric" value={plankRestSeconds} onChange={(event) => setPlankRestSeconds(event.target.value)} required />
+                  <span>초</span>
+                </span>
+              </label>
+              <label className="optional-metric">
+                <input type="checkbox" checked={plankSucceeded} onChange={(event) => setPlankSucceeded(event.target.checked)} />
+                <span>플랭크 3세트 성공</span>
+                <small>3세트를 모두 완료했을 때만 체크합니다.</small>
+              </label>
+            </>
+          )}
+        </div>
         <button className="save-button" type="submit" disabled={busy}>
           <Save size={17} aria-hidden="true" />
           {busy ? "저장 중" : savedRecord ? "기록 수정" : "결과 저장"}
@@ -409,6 +545,8 @@ function WorkoutResultForm({
           <span aria-hidden="true">→</span>
           {isPullup ? (
             <>{successSetCount}세트 이내 <strong>+{targetIncrement}</strong> · 초과 <strong>유지</strong></>
+          ) : progressionRule.earlyIncrement && progressionRule.earlySuccessSetCount ? (
+            <>{progressionRule.earlySuccessSetCount}세트 이내 <strong>+{progressionRule.earlyIncrement}</strong> · 5세트 성공 <strong>+{targetIncrement}</strong> · 실패 <strong>유지</strong></>
           ) : (
             <>성공 <strong>+{targetIncrement}</strong> · 실패 <strong>유지</strong></>
           )}
@@ -667,11 +805,9 @@ function UserRoutineHistory({
   completionRecords: RoutineCompletion[];
   programVersions: WorkoutProgramVersion[];
 }) {
-  const isNumeric = routine.id === "mon" || routine.id === "thu" || routine.id === "sat";
   const completions = completionRecords.filter((record) => record.routine_id === routine.id);
-  const records = routine.id === "sun"
-    ? [...workoutRecords, ...completions].sort((a, b) => b.workout_date.localeCompare(a.workout_date))
-    : isNumeric ? workoutRecords : completions;
+  const records = [...workoutRecords, ...completions]
+    .sort((a, b) => b.workout_date.localeCompare(a.workout_date));
 
   return (
     <section className="history-panel" aria-labelledby="user-history-title">
@@ -691,45 +827,53 @@ function UserRoutineHistory({
               const recordProgramVersion = findProgramVersionForRecord(programVersions, record);
               const recordProgression = recordProgramVersion?.definition.progressions;
               const isFiveSet = record.workout_type === "recovery_pushup" || record.workout_type === "sunday_pullup";
-              const targetIncrement = recordProgression
-                ? record.workout_type === "recovery_pushup"
-                  ? recordProgression.recovery_pushup.increment
-                  : record.workout_type === "sunday_pullup"
-                    ? recordProgression.sunday_pullup.increment
-                    : record.workout_type === "pullup"
-                      ? recordProgression.pullup.increment
-                      : recordProgression.pushup.increment
-                : 0;
-              const succeeded = recordProgression
-                ? isFiveSet
-                  ? fiveSetSucceeded(record)
-                  : record.workout_type === "pullup"
-                    ? record.total_reps >= record.target_total
-                      && record.set_count !== null
-                      && record.set_count <= (recordProgression.pullup.successSetCount ?? 10)
-                    : record.total_reps >= record.target_total
-                : false;
+              const outcome = recordOutcome({ ...record, record_kind: "workout_session" }, programVersions);
+              let progressionLabel = "목표 유지";
+              if (recordProgression && outcome.state === "pr") {
+                if (record.workout_type === "pushup") {
+                  const nextTarget = nextPushTarget(
+                    [record],
+                    record.target_total,
+                    recordProgression.pushup.increment,
+                    recordProgression.pushup.earlyIncrement ?? recordProgression.pushup.increment,
+                    recordProgression.pushup.earlySuccessSetCount ?? 0,
+                  );
+                  progressionLabel = nextTarget > record.target_total
+                    ? `다음 푸쉬업 +${nextTarget - record.target_total}`
+                    : "플랭크 목표 상승";
+                } else {
+                  const increment = record.workout_type === "recovery_pushup"
+                    ? recordProgression.recovery_pushup.increment
+                    : record.workout_type === "sunday_pullup"
+                      ? recordProgression.sunday_pullup.increment
+                      : recordProgression.pullup.increment;
+                  progressionLabel = `다음 목표 +${increment}${isFiveSet ? "/세트" : ""}`;
+                }
+              }
               const result = isFiveSet
                 ? `${record.set_reps?.join(" · ")}회 / 목표 ${record.target_total}×5`
                 : record.workout_type === "pullup"
-                  ? `목표 ${record.target_total}회 · ${record.set_count}세트`
-                  : `${record.total_reps} / ${record.target_total}회`;
+                  ? `목표 ${record.target_total}회 · ${record.set_count}세트${record.details.treadmill_speed ? ` · 러닝 속도 ${record.details.treadmill_speed}` : ""}`
+                  : `${record.total_reps} / ${record.target_total}회${record.set_count ? ` · ${record.set_count}세트` : ""}${record.details.plank_hold_seconds ? ` · 플랭크 ${record.details.plank_hold_seconds}/${record.details.plank_rest_seconds}초 ${record.details.plank_succeeded ? "성공" : "유지"}` : ""}`;
               return (
                 <article key={record.id}>
                   <div><strong>{formatWorkoutDate(record.workout_date)}</strong><small>WEEK {getJourneyWeekFromValue(record.workout_date)}</small></div>
                   <span>{result}</span>
-                  <em className={succeeded ? "success" : "keep"}>
+                  <em className={outcome.state === "pr" ? "success" : "keep"}>
                     {!recordProgramVersion
                       ? "프로그램 버전 확인 필요"
-                      : succeeded ? `다음 목표 +${targetIncrement}${isFiveSet ? "/세트" : ""}` : "목표 유지"}
+                      : progressionLabel}
                   </em>
                 </article>
               );
             }
+            const detail = record.details.dips_max_reps !== undefined
+              ? `딥스 1세트 ${record.details.dips_max_reps}회 · 러닝 속도 ${record.details.treadmill_speed}`
+              : routine.id === "tue" ? "휴식 완료" : "루틴 완료";
             return (
               <article key={record.id}>
                 <div><strong>{formatWorkoutDate(record.workout_date)}</strong><small>WEEK {getJourneyWeekFromValue(record.workout_date)}</small></div>
-                <span>{routine.id === "tue" ? "휴식 완료" : "루틴 완료"}</span>
+                <span>{detail}</span>
                 <em className="success">DONE</em>
               </article>
             );
@@ -745,20 +889,29 @@ function RoutineCompletionPanel({
   routine,
   workoutDate,
   session,
-  completed,
+  completionRecord,
   programVersionId,
   onChanged,
 }: {
   routine: Routine;
   workoutDate: string;
   session: Session | null;
-  completed: boolean;
+  completionRecord?: RoutineCompletion;
   programVersionId: string;
   onChanged: () => Promise<void>;
 }) {
+  const completed = Boolean(completionRecord);
+  const needsPressMetrics = routine.id === "sat" && routine.completion === true;
   const [email, setEmail] = useState("");
+  const [dipsMaxReps, setDipsMaxReps] = useState("");
+  const [treadmillSpeed, setTreadmillSpeed] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setDipsMaxReps(completionRecord?.details.dips_max_reps?.toString() ?? "");
+    setTreadmillSpeed(completionRecord?.details.treadmill_speed?.toString() ?? "");
+  }, [completionRecord, workoutDate]);
 
   async function sendMagicLink(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -777,31 +930,70 @@ function RoutineCompletionPanel({
     );
   }
 
-  async function toggleCompletion() {
-    if (!supabase || !session) return;
-    setBusy(true);
-    setMessage("");
+  function pressDetails(): WorkoutDetails | null {
+    if (!needsPressMetrics) return {};
+    if (dipsMaxReps.trim() === "" || treadmillSpeed.trim() === "") {
+      setMessage("딥스 최대 횟수와 러닝머신 속도를 모두 입력해주세요.");
+      return null;
+    }
+    const reps = Number(dipsMaxReps);
+    const speed = Number(treadmillSpeed);
+    if (!Number.isInteger(reps) || reps < 0 || !Number.isFinite(speed) || speed < 10) {
+      setMessage("딥스 최대 횟수는 0 이상의 정수, 러닝머신 속도는 10 이상으로 입력해주세요.");
+      return null;
+    }
+    return { dips_max_reps: reps, treadmill_speed: speed };
+  }
 
-    const query = completed
-      ? supabase
-          .from("routine_completions")
-          .delete()
-          .eq("workout_date", workoutDate)
-          .eq("routine_id", routine.id)
+  async function saveCompletion(details: WorkoutDetails) {
+    if (!supabase || !session) return false;
+    const query = completionRecord
+      ? supabase.from("routine_completions").update({ details }).eq("id", completionRecord.id)
       : supabase.from("routine_completions").insert({
           user_id: session.user.id,
           workout_date: workoutDate,
           routine_id: routine.id,
           program_version_id: programVersionId,
+          details,
         });
     const { error } = await query;
-
     if (error) {
       setMessage(`완료 상태를 저장하지 못했습니다: ${error.message}`);
-    } else {
-      await onChanged();
-      setMessage(completed ? "완료 체크를 취소했습니다." : "운동 완료를 기록했습니다.");
+      return false;
     }
+    await onChanged();
+    return true;
+  }
+
+  async function toggleCompletion() {
+    if (!supabase || !session) return;
+    setBusy(true);
+    setMessage("");
+    if (!completed) {
+      const details = pressDetails();
+      if (!details) {
+        setBusy(false);
+        return;
+      }
+      if (await saveCompletion(details)) setMessage("운동 완료를 기록했습니다.");
+    } else {
+      const { error } = await supabase.from("routine_completions").delete().eq("id", completionRecord!.id);
+      if (error) setMessage(`완료 상태를 저장하지 못했습니다: ${error.message}`);
+      else {
+        await onChanged();
+        setMessage("완료 체크를 취소했습니다.");
+      }
+    }
+    setBusy(false);
+  }
+
+  async function updatePressMetrics(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const details = pressDetails();
+    if (!details) return;
+    setBusy(true);
+    setMessage("");
+    if (await saveCompletion(details)) setMessage(completed ? "Press 기록을 수정했습니다." : "Press 루틴 완료를 기록했습니다.");
     setBusy(false);
   }
 
@@ -865,6 +1057,30 @@ function RoutineCompletionPanel({
           <LogOut size={14} aria-hidden="true" /> 로그아웃
         </button>
       </div>
+      {needsPressMetrics && (
+        <form className="recovery-result-form" onSubmit={updatePressMetrics}>
+          <div className="record-inputs">
+            <label>
+              딥스 1세트 최대 횟수
+              <span className="number-input">
+                <input type="number" min="0" step="1" inputMode="numeric" value={dipsMaxReps} onChange={(event) => setDipsMaxReps(event.target.value)} required />
+                <span>회</span>
+              </span>
+            </label>
+            <label>
+              러닝머신 5분 최고 유지 속도
+              <span className="number-input">
+                <input type="number" min="10" step="0.1" inputMode="decimal" value={treadmillSpeed} onChange={(event) => setTreadmillSpeed(event.target.value)} required />
+                <span>속도</span>
+              </span>
+            </label>
+          </div>
+          <button className="save-button" type="submit" disabled={busy}>
+            <Save size={17} aria-hidden="true" />
+            {busy ? "저장 중" : completed ? "Press 기록 수정" : "결과와 완료 저장"}
+          </button>
+        </form>
+      )}
       <label className={`completion-check ${completed ? "checked" : ""}`}>
         <input
           type="checkbox"
@@ -982,15 +1198,17 @@ function AdminDailyPanel({
                       {isFiveSet
                         ? `${record.set_reps?.join(" · ")}회 / 목표 ${record.target_total}×5`
                         : record.workout_type === "pullup"
-                        ? `${record.target_total}회 · ${record.set_count}세트`
-                        : `${record.total_reps} / ${record.target_total}회`}
+                        ? `${record.target_total}회 · ${record.set_count}세트${record.details.treadmill_speed ? ` · 러닝 속도 ${record.details.treadmill_speed}` : ""}`
+                        : `${record.total_reps} / ${record.target_total}회${record.set_count ? ` · ${record.set_count}세트` : ""}${record.details.plank_hold_seconds ? ` · 플랭크 ${record.details.plank_hold_seconds}/${record.details.plank_rest_seconds}초 ${record.details.plank_succeeded ? "성공" : "유지"}` : ""}`}
                     </strong>
                     <em className="success">기록됨</em>
                   </div>
                 ) : (
                   <div className="admin-result">
                     <span>완료 체크</span>
-                    <strong>{record.routine_id === routine.id ? "이 루틴 완료" : `${record.routine_id} 완료`}</strong>
+                    <strong>{record.details.dips_max_reps !== undefined
+                      ? `딥스 ${record.details.dips_max_reps}회 · 러닝 속도 ${record.details.treadmill_speed}`
+                      : record.routine_id === routine.id ? "이 루틴 완료" : `${record.routine_id} 완료`}</strong>
                     <em className="success">DONE</em>
                   </div>
                 )}
@@ -1016,10 +1234,12 @@ function AdminDailyPanel({
             const result = isFiveSet
               ? `${record.set_reps?.join(" · ")}회 / 목표 ${record.target_total}×5`
               : record.workout_type === "pullup"
-                ? `목표 ${record.target_total}회 · ${record.set_count}세트`
+                ? `목표 ${record.target_total}회 · ${record.set_count}세트${record.details.treadmill_speed ? ` · 러닝 속도 ${record.details.treadmill_speed}` : ""}`
                 : record.workout_type === "pushup"
-                  ? `${record.total_reps} / ${record.target_total}회`
-                  : record.routine_id === "tue" ? "휴식 완료" : "루틴 완료";
+                  ? `${record.total_reps} / ${record.target_total}회${record.set_count ? ` · ${record.set_count}세트` : ""}${record.details.plank_hold_seconds ? ` · 플랭크 ${record.details.plank_hold_seconds}/${record.details.plank_rest_seconds}초 ${record.details.plank_succeeded ? "성공" : "유지"}` : ""}`
+                  : record.details.dips_max_reps !== undefined
+                    ? `딥스 ${record.details.dips_max_reps}회 · 러닝 속도 ${record.details.treadmill_speed}`
+                    : record.routine_id === "tue" ? "휴식 완료" : "루틴 완료";
 
             return (
               <article key={`history-${record.record_kind}-${record.user_id}-${record.workout_date}`}>
@@ -1046,7 +1266,7 @@ function AdminDailyPanel({
 function App() {
   const today = useMemo(getSeoulToday, []);
   const [selectedId, setSelectedId] = useState(() => getTodayRoutineId(today));
-  const [programVersions, setProgramVersions] = useState<WorkoutProgramVersion[]>([DEFAULT_WORKOUT_PROGRAM_VERSION]);
+  const [programVersions, setProgramVersions] = useState<WorkoutProgramVersion[]>(DEFAULT_WORKOUT_PROGRAM_VERSIONS);
   const [session, setSession] = useState<Session | null>(null);
   const [authNotice, setAuthNotice] = useState("");
   const [pushRecords, setPushRecords] = useState<WorkoutSession[]>([]);
@@ -1058,6 +1278,8 @@ function App() {
   const [recordsRevision, setRecordsRevision] = useState(0);
   const isAdmin = session?.user.email?.toLowerCase() === ADMIN_EMAIL;
   const todayId = getTodayRoutineId(today);
+  const todayValue = toDateInputValue(today);
+  const isGearSecondTheme = isGearSecondDate(todayValue);
   const selectedRef = useRef<HTMLButtonElement>(null);
   const weekMapRef = useRef<HTMLDivElement>(null);
   const activeUserIdRef = useRef<string | null>(null);
@@ -1121,6 +1343,10 @@ function App() {
         priorPushRecords,
         dateProgression.pushup.initialTarget,
         priorPushProgramVersion ? priorPushProgression.pushup.increment : 0,
+        priorPushProgramVersion
+          ? priorPushProgression.pushup.earlyIncrement ?? priorPushProgression.pushup.increment
+          : 0,
+        priorPushProgramVersion ? priorPushProgression.pushup.earlySuccessSetCount ?? 0 : 0,
       );
       const datePullTarget = pullRecord?.target_total ?? nextPullTarget(
         priorPullRecords,
@@ -1138,14 +1364,37 @@ function App() {
         dateProgression.sunday_pullup.initialTarget,
         priorSundayProgramVersion ? priorSundayProgression.sunday_pullup.increment : 0,
       );
+      const plankRule = dateProgression.plank;
+      const priorPlankRule = priorPushProgramVersion?.definition.progressions.plank ?? plankRule;
+      const datePlankTarget = plankRule
+        ? pushRecord
+          && Number.isInteger(pushRecord.details.plank_hold_seconds)
+          && Number.isInteger(pushRecord.details.plank_rest_seconds)
+            ? {
+                holdSeconds: pushRecord.details.plank_hold_seconds!,
+                restSeconds: pushRecord.details.plank_rest_seconds!,
+              }
+            : nextPlankTarget(
+                priorPushRecords,
+                plankRule.initialHoldSeconds,
+                plankRule.initialRestSeconds,
+                priorPlankRule?.holdIncrementSeconds ?? plankRule.holdIncrementSeconds,
+                priorPlankRule?.restIncrementSeconds ?? plankRule.restIncrementSeconds,
+              )
+        : { holdSeconds: 40, restSeconds: 20 };
       const routine = buildRoutines(
         dateProgramVersion.definition,
         datePushTarget,
         datePullTarget,
         dateRecoveryPushTarget,
         dateSundayPullupTarget,
+        datePlankTarget.holdSeconds,
+        datePlankTarget.restSeconds,
         dateProgression.pushup.increment,
         dateProgression.pullup.increment,
+        dateProgression.pushup.earlyIncrement ?? dateProgression.pushup.increment,
+        plankRule?.holdIncrementSeconds ?? 0,
+        plankRule?.restIncrementSeconds ?? 0,
         pushRecord,
         pullRecord,
         recoveryPushRecord,
@@ -1157,6 +1406,7 @@ function App() {
         date,
         workoutDate,
         routine,
+        programVersion: dateProgramVersion,
         programVersionId: dateActiveProgramVersion?.id ?? dateProgramVersion.id,
         programVersionMissing,
       };
@@ -1166,21 +1416,28 @@ function App() {
   const selectedDay = visibleDays.find(({ routine }) => routine.id === selectedId) ?? visibleDays[3];
   const selected = selectedDay.routine;
   const selectedWorkoutDate = selectedDay.workoutDate;
+  const selectedProgramVersion = selectedDay.programVersion;
+  const selectedProgressions = selectedProgramVersion.definition.progressions;
   const programVersionId = selectedDay.programVersionId;
+  const selectedCompletionRecord = completionRecords.find(
+    (record) => record.workout_date === selectedWorkoutDate && record.routine_id === selected.id,
+  );
+  const needsCompletion = selected.completion === true
+    || (selected.completion === undefined
+      && selectedProgramVersion.version === 1
+      && !["mon", "thu", "sat"].includes(selected.id));
 
   function isRoutineCompleted(routine: Routine, workoutDate: string) {
-    if (routine.id === "mon") {
-      return recoveryPushRecords.some((record) => record.workout_date === workoutDate);
-    }
-    if (routine.id === "thu") {
-      return pushRecords.some((record) => record.workout_date === workoutDate);
-    }
-    if (routine.id === "sat") {
-      return pullRecords.some((record) => record.workout_date === workoutDate);
-    }
-    return completionRecords.some(
+    const completion = completionRecords.some(
       (record) => record.workout_date === workoutDate && record.routine_id === routine.id,
     );
+    const programVersion = findProgramVersionForDate(programVersions, workoutDate) ?? DEFAULT_WORKOUT_PROGRAM_VERSION;
+    if (routine.completion === true
+      || (routine.completion === undefined && programVersion.version === 1 && !["mon", "thu", "sat"].includes(routine.id))) {
+      return completion;
+    }
+    return [...pushRecords, ...pullRecords, ...recoveryPushRecords, ...sundayPullupRecords]
+      .some((record) => record.workout_date === workoutDate) || completion;
   }
 
   async function loadRecords() {
@@ -1192,11 +1449,11 @@ function App() {
     const [sessionResult, completionResult] = await Promise.all([
       supabase
         .from("workout_sessions")
-        .select("id, workout_date, workout_type, program_version_id, target_total, total_reps, set_count, set_reps, created_at")
+        .select("id, workout_date, workout_type, program_version_id, target_total, total_reps, set_count, set_reps, details, created_at")
         .order("workout_date", { ascending: false }),
       supabase
         .from("routine_completions")
-        .select("id, workout_date, routine_id, program_version_id, completed_at")
+        .select("id, workout_date, routine_id, program_version_id, details, completed_at")
         .order("workout_date", { ascending: false }),
     ]);
 
@@ -1280,7 +1537,7 @@ function App() {
   }, [selectedId]);
 
   return (
-    <>
+    <div className={`app-shell ${isGearSecondTheme ? "gear-second" : ""}`}>
       <a className="skip-link" href="#weekly-map">주간 미니맵으로 건너뛰기</a>
 
       <header className="top-shell">
@@ -1437,6 +1694,13 @@ function App() {
                 <strong>{selected.target}</strong>
               </div>
 
+              {selected.inputs && (
+                <div className="current-target input-definition">
+                  <span>INPUT DATA</span>
+                  <strong>{selected.inputs}</strong>
+                </div>
+              )}
+
               {selected.record && (
                 <div className="record-line"><Check size={17} aria-hidden="true" /> {selected.record}</div>
               )}
@@ -1473,8 +1737,9 @@ function App() {
                 </a>
               )}
 
-              {selected.id === "thu" && !isAdmin && (
+              {selected.id === selectedProgressions.pushup.routineId && !isAdmin && (
                 <WorkoutResultForm
+                  key={`pushup-${selectedWorkoutDate}`}
                   workoutType="pushup"
                   session={session}
                   records={pushRecords}
@@ -1484,8 +1749,9 @@ function App() {
                   onSaved={loadRecords}
                 />
               )}
-              {selected.id === "mon" && !isAdmin && (
+              {selected.id === selectedProgressions.recovery_pushup.routineId && !isAdmin && (
                 <FiveSetProgressForm
+                  key={`recovery-pushup-${selectedWorkoutDate}`}
                   workoutType="recovery_pushup"
                   session={session}
                   records={recoveryPushRecords}
@@ -1494,8 +1760,9 @@ function App() {
                   onSaved={loadRecords}
                 />
               )}
-              {selected.id === "sun" && !isAdmin && (
+              {selected.id === selectedProgressions.sunday_pullup.routineId && !isAdmin && (
                 <FiveSetProgressForm
+                  key={`sunday-pullup-${selectedWorkoutDate}`}
                   workoutType="sunday_pullup"
                   session={session}
                   records={sundayPullupRecords}
@@ -1504,8 +1771,9 @@ function App() {
                   onSaved={loadRecords}
                 />
               )}
-              {selected.id === "sat" && !isAdmin && (
+              {selected.id === selectedProgressions.pullup.routineId && !isAdmin && (
                 <WorkoutResultForm
+                  key={`pullup-${selectedWorkoutDate}`}
                   workoutType="pullup"
                   session={session}
                   records={pullRecords}
@@ -1515,12 +1783,12 @@ function App() {
                   onSaved={loadRecords}
                 />
               )}
-              {selected.id !== "mon" && selected.id !== "thu" && selected.id !== "sat" && !isAdmin && (
+              {needsCompletion && !isAdmin && (
                 <RoutineCompletionPanel
                   routine={selected}
                   workoutDate={selectedWorkoutDate}
                   session={session}
-                  completed={isRoutineCompleted(selected, selectedWorkoutDate)}
+                  completionRecord={selectedCompletionRecord}
                   programVersionId={programVersionId}
                   onChanged={loadRecords}
                 />
@@ -1530,15 +1798,15 @@ function App() {
                   routine={selected}
                   programVersions={programVersions}
                   workoutRecords={
-                    selected.id === "mon"
+                    selected.id === selectedProgressions.recovery_pushup.routineId
                       ? recoveryPushRecords
-                      : selected.id === "thu"
+                      : selected.id === selectedProgressions.pushup.routineId
                         ? pushRecords
-                        : selected.id === "sat"
+                        : selected.id === selectedProgressions.pullup.routineId
                           ? pullRecords
-                          : selected.id === "sun"
+                          : selected.id === selectedProgressions.sunday_pullup.routineId
                             ? sundayPullupRecords
-                          : []
+                            : []
                   }
                   completionRecords={completionRecords}
                 />
@@ -1561,7 +1829,7 @@ function App() {
       </main>
 
       <footer><span>LUKE / 90 DAYS</span><span>THU 2026.07.23 — TUE 2026.10.20</span></footer>
-    </>
+    </div>
   );
 }
 
