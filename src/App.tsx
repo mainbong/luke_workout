@@ -12,8 +12,8 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
-import { fiveSetSucceeded, nextFiveSetTarget } from "./progression";
 import { AdminMonthlyPanel } from "./AdminMonthlyPanel";
+import { countMissionWorkoutDays, fiveSetSucceeded, nextFiveSetTarget } from "./progression";
 import {
   isSupabaseConfigured,
   supabase,
@@ -22,7 +22,8 @@ import {
   type WorkoutSession,
 } from "./supabase";
 
-const START_DATE = new Date("2026-07-23T00:00:00+09:00");
+const START_DATE_VALUE = "2026-07-23";
+const START_DATE = new Date(`${START_DATE_VALUE}T00:00:00+09:00`);
 const END_DATE = "2026-10-20";
 const TOTAL_DAYS = 90;
 const PUSH_START_TARGET = 100;
@@ -1291,11 +1292,14 @@ function App() {
   const [recoveryPushRecords, setRecoveryPushRecords] = useState<WorkoutSession[]>([]);
   const [sundayPullupRecords, setSundayPullupRecords] = useState<WorkoutSession[]>([]);
   const [completionRecords, setCompletionRecords] = useState<RoutineCompletion[]>([]);
+  const [recordsStatus, setRecordsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [recordsRevision, setRecordsRevision] = useState(0);
   const isAdmin = session?.user.email?.toLowerCase() === ADMIN_EMAIL;
   const todayId = getTodayRoutineId(today);
   const selectedRef = useRef<HTMLButtonElement>(null);
   const weekMapRef = useRef<HTMLDivElement>(null);
+  const activeUserIdRef = useRef<string | null>(null);
+  const recordsRequestRef = useRef(0);
   const journeyDay = getJourneyDay(today);
   const week = getJourneyWeek(today);
   const pushTarget = nextPushTarget(pushRecords);
@@ -1312,6 +1316,13 @@ function App() {
     ).map(({ id, ko, title }) => ({ id, ko, title })),
     [week],
   );
+  const progressEndDate = toDateInputValue(today) < END_DATE ? toDateInputValue(today) : END_DATE;
+  const completedDays = countMissionWorkoutDays(
+    [...pushRecords, ...pullRecords, ...recoveryPushRecords, ...sundayPullupRecords, ...completionRecords],
+    START_DATE_VALUE,
+    progressEndDate,
+  );
+  const completionRate = Math.round((completedDays / journeyDay) * 100);
   const visibleDays = useMemo(
     () => Array.from({ length: 7 }, (_, index) => {
       const date = addDays(today, index - 3);
@@ -1362,7 +1373,10 @@ function App() {
   }
 
   async function loadRecords() {
-    if (!supabase) return;
+    if (!supabase || !session) return;
+    const userId = session.user.id;
+    const requestId = ++recordsRequestRef.current;
+    setRecordsStatus("loading");
     const [sessionResult, completionResult] = await Promise.all([
       supabase
         .from("workout_sessions")
@@ -1374,6 +1388,8 @@ function App() {
         .order("workout_date", { ascending: false }),
     ]);
 
+    if (requestId !== recordsRequestRef.current || userId !== activeUserIdRef.current) return;
+
     if (!sessionResult.error) {
       const records = (sessionResult.data ?? []) as WorkoutSession[];
       setPushRecords(records.filter((record) => record.workout_type === "pushup"));
@@ -1384,21 +1400,30 @@ function App() {
     if (!completionResult.error) {
       setCompletionRecords((completionResult.data ?? []) as RoutineCompletion[]);
     }
+    setRecordsStatus(sessionResult.error || completionResult.error ? "error" : "ready");
     setRecordsRevision((revision) => revision + 1);
   }
 
   useEffect(() => {
     if (!supabase) return;
-    void supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-      if (!nextSession) {
+    function updateSession(nextSession: Session | null) {
+      const nextUserId = nextSession?.user.id ?? null;
+      if (nextUserId !== activeUserIdRef.current) {
+        recordsRequestRef.current += 1;
+        activeUserIdRef.current = nextUserId;
         setPushRecords([]);
         setPullRecords([]);
         setRecoveryPushRecords([]);
         setSundayPullupRecords([]);
         setCompletionRecords([]);
+        setRecordsStatus(nextSession ? "loading" : "idle");
       }
+      setSession(nextSession);
+    }
+
+    void supabase.auth.getSession().then(({ data }) => updateSession(data.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      updateSession(nextSession);
     });
     return () => listener.subscription.unsubscribe();
   }, []);
@@ -1448,10 +1473,52 @@ function App() {
             <h1>꾸준히 90일.</h1>
             <p>매주 같은 요일 루틴을 반복하고, 성과에 따라 목표 숫자만 갱신합니다.</p>
           </div>
-          <div className="hero-stats" aria-label="미션 현황">
-            <div><span>NOW</span><strong>DAY {String(journeyDay).padStart(2, "0")}</strong></div>
-            <div><span>CYCLE</span><strong>WEEK {week} / 13</strong></div>
-            <div><span>GOAL</span><strong>풀업 15 · 푸쉬업 60</strong></div>
+          <div className="hero-metrics">
+            <section
+              className={`mission-progress ${session && recordsStatus === "ready" ? "" : "muted"}`}
+              aria-label="내 운동 진행률"
+              aria-live="polite"
+              aria-busy={session ? recordsStatus === "loading" || recordsStatus === "idle" : undefined}
+            >
+              {session && recordsStatus === "ready" ? (
+                <>
+                  <div className="mission-progress-summary">
+                    <span>MY PROGRESS</span>
+                    <strong>{completedDays}/{journeyDay} DAYS</strong>
+                  </div>
+                  <p id="mission-progress-copy">{completionRate}% 운동 완료</p>
+                  <progress
+                    aria-describedby="mission-progress-copy"
+                    aria-label="90일 미션 운동 완료일"
+                    max={journeyDay}
+                    value={completedDays}
+                  >
+                    {completionRate}%
+                  </progress>
+                </>
+              ) : (
+                <>
+                  <div className="mission-progress-summary">
+                    <span>MY PROGRESS</span>
+                    <strong>
+                      {session
+                        ? recordsStatus === "error" ? "기록을 불러오지 못했습니다" : "기록 불러오는 중"
+                        : "로그인이 필요합니다"}
+                    </strong>
+                  </div>
+                  <p>
+                    {session && recordsStatus === "error"
+                      ? "잠시 후 다시 확인해주세요."
+                      : session ? "내 운동 기록을 확인하고 있습니다." : "로그인하면 기록 기반 진행률을 확인할 수 있습니다."}
+                  </p>
+                </>
+              )}
+            </section>
+            <div className="hero-stats" aria-label="미션 현황">
+              <div><span>NOW</span><strong>DAY {String(journeyDay).padStart(2, "0")}</strong></div>
+              <div><span>CYCLE</span><strong>WEEK {week} / 13</strong></div>
+              <div><span>GOAL</span><strong>풀업 15 · 푸쉬업 60</strong></div>
+            </div>
           </div>
         </div>
       </header>
