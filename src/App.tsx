@@ -1183,7 +1183,7 @@ function AdminDailyPanel({
       <div className="admin-summary">
         <span><Users size={15} aria-hidden="true" /> 기록 사용자</span>
         <strong>{new Set(records.map((record) => record.user_id)).size}명</strong>
-        <small>{routine.ko} 누적 {records.length}회</small>
+        <small>선택 루틴 계보 누적 {records.length}회</small>
       </div>
 
       {message && <p className="form-message" role="alert">{message}</p>}
@@ -1241,10 +1241,10 @@ function AdminDailyPanel({
       {records.length === 0 ? (
         <div className="admin-empty">
           <strong>아직 누적된 기록이 없습니다.</strong>
-          <span>사용자가 이 요일의 결과나 완료 상태를 저장하면 주차별로 쌓입니다.</span>
+          <span>사용자가 이 루틴 계보의 결과나 완료 상태를 저장하면 주차별로 쌓입니다.</span>
         </div>
       ) : (
-        <div className="admin-records admin-history-records" aria-label={`${routine.ko} 전체 주차 기록`}>
+        <div className="admin-records admin-history-records" aria-label="선택한 루틴 계보 전체 주차 기록">
           {records.map((record) => {
             const isFiveSet = record.workout_type === "recovery_pushup" || record.workout_type === "sunday_pullup";
             const result = isFiveSet
