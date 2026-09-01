@@ -28,15 +28,16 @@ const program = JSON.parse(read("../src/program.json"));
 const gearSecond = JSON.parse(read("../src/program-gear-second.json"));
 const migration = read("../supabase/migrations/20260901000400_create_workout_program_versions.sql");
 const gearMigration = read("../supabase/migrations/20260901000500_launch_gear_second_v2.sql");
+const eventMigration = read("../supabase/migrations/20260901000800_preserve_record_event_history.sql");
 const identityMigration = read("../supabase/migrations/20260901000600_harden_record_identity.sql");
 const fiveSetMigration = read("../supabase/migrations/20260901000700_require_complete_five_set_records.sql");
 const seed = migration.match(/\$program\$\s*([\s\S]*?)\s*\$program\$/);
 
 assert.ok(seed, "migration must contain a $program$ seed");
 assert.deepEqual(JSON.parse(seed[1]), program, "migration seed must match src/program.json");
-const gearSeed = gearMigration.match(/\$program\$\s*([\s\S]*?)\s*\$program\$/);
+const gearSeed = eventMigration.match(/\$program\$\s*([\s\S]*?)\s*\$program\$/);
 assert.ok(gearSeed, "Gear Second migration must contain a $program$ seed");
-assert.deepEqual(JSON.parse(gearSeed[1]), gearSecond, "Gear Second migration seed must match its source JSON");
+assert.deepEqual(JSON.parse(gearSeed[1]), gearSecond, "canonical Gear Second migration seed must match its source JSON");
 assert.match(migration, /workout_program_versions_metadata_check[\s\S]*?is not distinct from/, "outer and JSON metadata must match");
 assert.match(migration, /New workout records require a program version/, "new records must reject an explicit null version");
 assert.match(migration, /Workout record program version is immutable/, "record provenance must be immutable");
@@ -96,10 +97,11 @@ assert.deepEqual(program.progressions, {
   },
 });
 
-assert.ok(parseWorkoutProgramVersion(GEAR_SECOND_WORKOUT_PROGRAM_VERSION), "production parser must accept Gear Second v2");
-assert.deepEqual(DEFAULT_WORKOUT_PROGRAM_VERSIONS.map(({ version }) => version), [2, 1]);
+assert.ok(parseWorkoutProgramVersion(GEAR_SECOND_WORKOUT_PROGRAM_VERSION), "production parser must accept canonical Gear Second");
+assert.equal(GEAR_SECOND_WORKOUT_PROGRAM_VERSION.id, "luke-weekly-2026-09-02-canonical");
+assert.deepEqual(DEFAULT_WORKOUT_PROGRAM_VERSIONS.map(({ version }) => version), [3, 1]);
 assert.equal(findProgramVersionForDate(DEFAULT_WORKOUT_PROGRAM_VERSIONS, "2026-09-01")?.version, 1);
-assert.equal(findProgramVersionForDate(DEFAULT_WORKOUT_PROGRAM_VERSIONS, "2026-09-02")?.version, 2);
+assert.equal(findProgramVersionForDate(DEFAULT_WORKOUT_PROGRAM_VERSIONS, "2026-09-02")?.version, 3);
 assert.equal(isGearSecondDate("2026-09-01"), false);
 assert.equal(isGearSecondDate("2026-09-02"), true);
 assert.deepEqual(gearSecond.days.map(({ id }) => id), ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
@@ -129,6 +131,18 @@ assert.equal(new Set(gearLinks).size, 50, "Gear Second guide link reuse changed"
 const straightArm = gearSecond.days.find(({ id }) => id === "sun").exercises.find(({ name }) => name === "스트레이트 암 풀다운");
 assert.equal(straightArm.prescription, "10회 × 5세트");
 assert.match(straightArm.note, /15회/, "the documented 10/15 rep conflict must remain visible");
+const gearSaturday = gearSecond.days.find(({ id }) => id === "sat");
+const gearSunday = gearSecond.days.find(({ id }) => id === "sun");
+assert.match(gearSaturday.target, /6종/, "the documented Saturday 6/7 exercise conflict must remain visible");
+assert.equal(gearSaturday.exercises.slice(0, 7).length, 7);
+assert.match(gearSunday.target, /5분/, "the documented Sunday 5/10 minute conflict must remain visible");
+assert.equal(gearSunday.exercises.find(({ name }) => name === "러닝머신").prescription, "속도 7 이상 · 10분");
+assert.equal(
+  gearSecond.days.find(({ id }) => id === "wed").exercises[2].note,
+  "예: 5, 5, 3, 3, 3, 3, 2, 2, 2, 2 = 총 30회, 10세트 성공.",
+  "canonical explanatory text changed",
+);
+assert.match(eventMigration, /'luke-weekly-2026-09-02-canonical'[\s\S]*?\n  3,[\s\S]*?\$program\$/);
 assert.match(gearMigration, /add column details jsonb not null default '\{\}'::jsonb/g);
 assert.match(gearMigration, /workout_type = 'pushup' and \(set_count is null or set_count between 1 and 5\)/);
 assert.match(gearMigration, /0 <= all \(set_reps\)/, "five-set results must reject negative reps at the database boundary");

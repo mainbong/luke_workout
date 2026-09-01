@@ -9,6 +9,7 @@
     "check:admin-calendar": "node --experimental-strip-types scripts/check-admin-calendar.mjs",
     "check:program": "node scripts/check-program.mjs",
     "check:progression": "node --experimental-strip-types scripts/check-progression.mjs",
+    "check:record-events": "node --experimental-strip-types scripts/check-record-events.mjs",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false"
   },

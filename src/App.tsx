@@ -33,13 +33,16 @@ import {
   type WorkoutProgramVersion,
 } from "./program";
 import { recordOutcome, routineIdForDate } from "./adminCalendar";
+import { currentRoutineCompletions, currentWorkoutSessions } from "./recordEvents";
 import {
   isSupabaseConfigured,
   supabase,
   type AdminRoutineHistoryRecord,
   type RoutineCompletion,
+  type RoutineCompletionEvent,
   type WorkoutDetails,
   type WorkoutSession,
+  type WorkoutSessionEvent,
 } from "./supabase";
 
 const START_DATE_VALUE = "2026-07-23";
@@ -332,15 +335,13 @@ function WorkoutResultForm({
       } : {}),
     };
     const values = { target_total: target, total_reps: reps, set_count: sets, details };
-    const { error } = existing
-      ? await supabase.from("workout_sessions").update(values).eq("id", existing.id)
-      : await supabase.from("workout_sessions").insert({
-          ...values,
-          user_id: session.user.id,
-          workout_date: workoutDate,
-          workout_type: workoutType,
-          program_version_id: programVersionId!,
-        });
+    const { error } = await supabase.from("workout_sessions").insert({
+      ...values,
+      user_id: session.user.id,
+      workout_date: workoutDate,
+      workout_type: workoutType,
+      program_version_id: programVersionId!,
+    });
 
     if (error) {
       setMessage(`저장하지 못했습니다: ${error.message}`);
@@ -659,15 +660,13 @@ function FiveSetProgressForm({
       set_count: 5,
       set_reps: reps,
     };
-    const { error } = savedRecord
-      ? await supabase.from("workout_sessions").update(values).eq("id", savedRecord.id)
-      : await supabase.from("workout_sessions").insert({
-          ...values,
-          user_id: session.user.id,
-          workout_date: workoutDate,
-          workout_type: workoutType,
-          program_version_id: programVersionId!,
-        });
+    const { error } = await supabase.from("workout_sessions").insert({
+      ...values,
+      user_id: session.user.id,
+      workout_date: workoutDate,
+      workout_type: workoutType,
+      program_version_id: programVersionId!,
+    });
 
     if (error) {
       setMessage(`저장하지 못했습니다: ${error.message}`);
@@ -801,13 +800,17 @@ function UserRoutineHistory({
   programVersions,
 }: {
   routine: Routine;
-  workoutRecords: WorkoutSession[];
-  completionRecords: RoutineCompletion[];
+  workoutRecords: WorkoutSessionEvent[];
+  completionRecords: RoutineCompletionEvent[];
   programVersions: WorkoutProgramVersion[];
 }) {
   const completions = completionRecords.filter((record) => record.routine_id === routine.id);
-  const records = [...workoutRecords, ...completions]
-    .sort((a, b) => b.workout_date.localeCompare(a.workout_date));
+  const records = [...workoutRecords, ...completions].sort((a, b) =>
+    b.workout_date.localeCompare(a.workout_date)
+    || (b.event_order ?? 0) - (a.event_order ?? 0)
+    || ("updated_at" in b ? b.updated_at : b.completed_at)
+      .localeCompare("updated_at" in a ? a.updated_at : a.completed_at)
+    || b.id.localeCompare(a.id));
 
   return (
     <section className="history-panel" aria-labelledby="user-history-title">
@@ -857,10 +860,12 @@ function UserRoutineHistory({
                   : `${record.total_reps} / ${record.target_total}회${record.set_count ? ` · ${record.set_count}세트` : ""}${record.details.plank_hold_seconds ? ` · 플랭크 ${record.details.plank_hold_seconds}/${record.details.plank_rest_seconds}초 ${record.details.plank_succeeded ? "성공" : "유지"}` : ""}`;
               return (
                 <article key={record.id}>
-                  <div><strong>{formatWorkoutDate(record.workout_date)}</strong><small>WEEK {getJourneyWeekFromValue(record.workout_date)}</small></div>
+                  <div><strong>{formatWorkoutDate(record.workout_date)}</strong><small>WEEK {getJourneyWeekFromValue(record.workout_date)} · {formatRecordedAt(record.updated_at)}</small></div>
                   <span>{result}</span>
-                  <em className={outcome.state === "pr" ? "success" : "keep"}>
-                    {!recordProgramVersion
+                  <em className={record.is_current && outcome.state === "pr" ? "success" : "keep"}>
+                    {!record.is_current
+                      ? "수정 전"
+                      : !recordProgramVersion
                       ? "프로그램 버전 확인 필요"
                       : progressionLabel}
                   </em>
@@ -872,15 +877,17 @@ function UserRoutineHistory({
               : routine.id === "tue" ? "휴식 완료" : "루틴 완료";
             return (
               <article key={record.id}>
-                <div><strong>{formatWorkoutDate(record.workout_date)}</strong><small>WEEK {getJourneyWeekFromValue(record.workout_date)}</small></div>
+                <div><strong>{formatWorkoutDate(record.workout_date)}</strong><small>WEEK {getJourneyWeekFromValue(record.workout_date)} · {formatRecordedAt(record.completed_at)}</small></div>
                 <span>{detail}</span>
-                <em className="success">DONE</em>
+                <em className={record.is_current && record.is_completed ? "success" : "keep"}>
+                  {!record.is_completed ? "CANCELED" : record.is_current ? "DONE" : "이전 완료"}
+                </em>
               </article>
             );
           })}
         </div>
       )}
-      <p className="history-note">같은 날짜를 다시 저장하면 수정되고, 다음 주 기록은 새 항목으로 계속 쌓입니다.</p>
+      <p className="history-note">같은 날짜의 수정 전·후 값과 완료 취소도 삭제 없이 시간순으로 쌓입니다.</p>
     </section>
   );
 }
@@ -947,15 +954,14 @@ function RoutineCompletionPanel({
 
   async function saveCompletion(details: WorkoutDetails) {
     if (!supabase || !session) return false;
-    const query = completionRecord
-      ? supabase.from("routine_completions").update({ details }).eq("id", completionRecord.id)
-      : supabase.from("routine_completions").insert({
-          user_id: session.user.id,
-          workout_date: workoutDate,
-          routine_id: routine.id,
-          program_version_id: programVersionId,
-          details,
-        });
+    const query = supabase.from("routine_completions").insert({
+      user_id: session.user.id,
+      workout_date: workoutDate,
+      routine_id: routine.id,
+      program_version_id: programVersionId,
+      details,
+      is_completed: true,
+    });
     const { error } = await query;
     if (error) {
       setMessage(`완료 상태를 저장하지 못했습니다: ${error.message}`);
@@ -977,7 +983,14 @@ function RoutineCompletionPanel({
       }
       if (await saveCompletion(details)) setMessage("운동 완료를 기록했습니다.");
     } else {
-      const { error } = await supabase.from("routine_completions").delete().eq("id", completionRecord!.id);
+      const { error } = await supabase.from("routine_completions").insert({
+        user_id: session.user.id,
+        workout_date: workoutDate,
+        routine_id: routine.id,
+        program_version_id: programVersionId,
+        details: completionRecord!.details,
+        is_completed: false,
+      });
       if (error) setMessage(`완료 상태를 저장하지 못했습니다: ${error.message}`);
       else {
         await onChanged();
@@ -1113,7 +1126,10 @@ function AdminDailyPanel({
   const [records, setRecords] = useState<AdminRoutineHistoryRecord[]>([]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const dailyRecords = records.filter((record) => record.workout_date === workoutDate);
+  const dailyRecords = records.filter((record) =>
+    record.workout_date === workoutDate
+    && record.is_current
+    && (record.record_kind === "workout_session" || record.is_completed));
 
   async function loadAdminRecords() {
     if (!supabase) return;
@@ -1242,15 +1258,19 @@ function AdminDailyPanel({
                     : record.routine_id === "tue" ? "휴식 완료" : "루틴 완료";
 
             return (
-              <article key={`history-${record.record_kind}-${record.user_id}-${record.workout_date}`}>
+              <article key={record.event_id}>
                 <div className="admin-user">
                   <span>{record.user_email}</span>
                   <small>{formatWorkoutDate(record.workout_date)} · WEEK {getJourneyWeekFromValue(record.workout_date)} · {formatRecordedAt(record.recorded_at)}</small>
                 </div>
                 <div className="admin-result">
-                  <span>{record.record_kind === "workout_session" ? "결과" : "완료 체크"}</span>
+                  <span>{record.record_kind === "workout_session" ? "결과" : record.is_completed ? "완료 체크" : "완료 취소"}</span>
                   <strong>{result}</strong>
-                  <em className="success">{record.record_kind === "routine_completion" ? "DONE" : "기록됨"}</em>
+                  <em className={record.is_current && (record.record_kind === "workout_session" || record.is_completed) ? "success" : "keep"}>
+                    {record.record_kind === "workout_session"
+                      ? record.is_current ? "현재" : "수정 전"
+                      : !record.is_completed ? "CANCELED" : record.is_current ? "DONE" : "이전 완료"}
+                  </em>
                 </div>
               </article>
             );
@@ -1274,6 +1294,8 @@ function App() {
   const [recoveryPushRecords, setRecoveryPushRecords] = useState<WorkoutSession[]>([]);
   const [sundayPullupRecords, setSundayPullupRecords] = useState<WorkoutSession[]>([]);
   const [completionRecords, setCompletionRecords] = useState<RoutineCompletion[]>([]);
+  const [workoutHistory, setWorkoutHistory] = useState<WorkoutSessionEvent[]>([]);
+  const [completionHistory, setCompletionHistory] = useState<RoutineCompletionEvent[]>([]);
   const [recordsStatus, setRecordsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [recordsRevision, setRecordsRevision] = useState(0);
   const isAdmin = session?.user.email?.toLowerCase() === ADMIN_EMAIL;
@@ -1448,26 +1470,36 @@ function App() {
     setRecordsStatus("loading");
     const [sessionResult, completionResult] = await Promise.all([
       supabase
-        .from("workout_sessions")
-        .select("id, workout_date, workout_type, program_version_id, target_total, total_reps, set_count, set_reps, details, created_at")
-        .order("workout_date", { ascending: false }),
+        .from("workout_session_history")
+        .select("id, workout_date, workout_type, program_version_id, target_total, total_reps, set_count, set_reps, details, created_at, updated_at, event_order, is_current")
+        .order("workout_date", { ascending: false })
+        .order("event_order", { ascending: false, nullsFirst: false })
+        .order("updated_at", { ascending: false })
+        .order("id", { ascending: false }),
       supabase
-        .from("routine_completions")
-        .select("id, workout_date, routine_id, program_version_id, details, completed_at")
-        .order("workout_date", { ascending: false }),
+        .from("routine_completion_history")
+        .select("id, workout_date, routine_id, program_version_id, details, completed_at, event_order, is_completed, is_current")
+        .order("workout_date", { ascending: false })
+        .order("event_order", { ascending: false, nullsFirst: false })
+        .order("completed_at", { ascending: false })
+        .order("id", { ascending: false }),
     ]);
 
     if (requestId !== recordsRequestRef.current || userId !== activeUserIdRef.current) return;
 
     if (!sessionResult.error) {
-      const records = (sessionResult.data ?? []) as WorkoutSession[];
+      const events = (sessionResult.data ?? []) as WorkoutSessionEvent[];
+      const records = currentWorkoutSessions(events);
+      setWorkoutHistory(events);
       setPushRecords(records.filter((record) => record.workout_type === "pushup"));
       setPullRecords(records.filter((record) => record.workout_type === "pullup"));
       setRecoveryPushRecords(records.filter((record) => record.workout_type === "recovery_pushup"));
       setSundayPullupRecords(records.filter((record) => record.workout_type === "sunday_pullup"));
     }
     if (!completionResult.error) {
-      setCompletionRecords((completionResult.data ?? []) as RoutineCompletion[]);
+      const events = (completionResult.data ?? []) as RoutineCompletionEvent[];
+      setCompletionHistory(events);
+      setCompletionRecords(currentRoutineCompletions(events));
     }
     setRecordsStatus(sessionResult.error || completionResult.error ? "error" : "ready");
     setRecordsRevision((revision) => revision + 1);
@@ -1504,6 +1536,8 @@ function App() {
         setRecoveryPushRecords([]);
         setSundayPullupRecords([]);
         setCompletionRecords([]);
+        setWorkoutHistory([]);
+        setCompletionHistory([]);
         setRecordsStatus(nextSession ? "loading" : "idle");
       }
       setSession(nextSession);
@@ -1799,16 +1833,16 @@ function App() {
                   programVersions={programVersions}
                   workoutRecords={
                     selected.id === selectedProgressions.recovery_pushup.routineId
-                      ? recoveryPushRecords
+                      ? workoutHistory.filter((record) => record.workout_type === "recovery_pushup")
                       : selected.id === selectedProgressions.pushup.routineId
-                        ? pushRecords
+                        ? workoutHistory.filter((record) => record.workout_type === "pushup")
                         : selected.id === selectedProgressions.pullup.routineId
-                          ? pullRecords
+                          ? workoutHistory.filter((record) => record.workout_type === "pullup")
                           : selected.id === selectedProgressions.sunday_pullup.routineId
-                            ? sundayPullupRecords
+                            ? workoutHistory.filter((record) => record.workout_type === "sunday_pullup")
                             : []
                   }
-                  completionRecords={completionRecords}
+                  completionRecords={completionHistory}
                 />
               )}
               {isAdmin && (

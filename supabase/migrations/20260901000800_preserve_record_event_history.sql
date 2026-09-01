@@ -1,3 +1,611 @@
+alter table public.workout_sessions
+drop constraint workout_sessions_user_id_workout_date_workout_type_key,
+add column event_order bigint check (event_order > 0);
+
+alter table public.routine_completions
+drop constraint routine_completions_user_id_workout_date_routine_id_key,
+add column event_order bigint check (event_order > 0),
+add column is_completed boolean;
+
+create sequence public.record_event_order_seq;
+
+revoke all on sequence public.record_event_order_seq from public, anon, authenticated;
+grant usage on sequence public.record_event_order_seq to authenticated;
+
+create index workout_sessions_latest_event_idx
+on public.workout_sessions (user_id, workout_date, workout_type, event_order desc nulls last);
+
+create index routine_completions_latest_event_idx
+on public.routine_completions (user_id, workout_date, routine_id, event_order desc nulls last);
+
+drop policy "Users can update their own workout sessions"
+on public.workout_sessions;
+
+drop policy "Users can delete their own workout sessions"
+on public.workout_sessions;
+
+drop policy "Users can update their own routine completions"
+on public.routine_completions;
+
+drop policy "Users can delete their own routine completions"
+on public.routine_completions;
+
+revoke all on public.workout_sessions, public.routine_completions
+from public, anon, authenticated;
+grant select, insert on public.workout_sessions, public.routine_completions
+to authenticated;
+
+create function public.stamp_record_event()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  new.event_order := nextval('public.record_event_order_seq'::regclass);
+  if tg_table_name = 'workout_sessions' then
+    new.created_at := statement_timestamp();
+    new.updated_at := new.created_at;
+  else
+    new.completed_at := statement_timestamp();
+  end if;
+  return new;
+end;
+$$;
+
+create trigger stamp_workout_session_event
+before insert on public.workout_sessions
+for each row execute function public.stamp_record_event();
+
+create trigger stamp_routine_completion_event
+before insert on public.routine_completions
+for each row execute function public.stamp_record_event();
+
+create function public.enforce_workout_session_event()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  previous_event public.workout_sessions%rowtype;
+begin
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
+    'workout|' || new.user_id::text || '|' || new.workout_date::text || '|' || new.workout_type,
+    0
+  ));
+
+  select event.*
+  into previous_event
+  from public.workout_sessions as event
+  where event.user_id = new.user_id
+    and event.workout_date = new.workout_date
+    and event.workout_type = new.workout_type
+  order by event.event_order desc nulls last
+  limit 1;
+
+  if found then
+    if new.target_total <> previous_event.target_total then
+      raise exception 'Workout event edits must keep the original target'
+        using errcode = '23514';
+    end if;
+    new.program_version_id := previous_event.program_version_id;
+  end if;
+
+  return new;
+end;
+$$;
+
+-- These event triggers intentionally sort before the existing *_program_version
+-- triggers so inherited provenance is restored before Gear Second validation.
+create trigger enforce_workout_session_event
+before insert on public.workout_sessions
+for each row execute function public.enforce_workout_session_event();
+
+create function public.enforce_routine_completion_event()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  previous_event public.routine_completions%rowtype;
+begin
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
+    'completion|' || new.user_id::text || '|' || new.workout_date::text || '|' || new.routine_id,
+    0
+  ));
+
+  select event.*
+  into previous_event
+  from public.routine_completions as event
+  where event.user_id = new.user_id
+    and event.workout_date = new.workout_date
+    and event.routine_id = new.routine_id
+  order by event.event_order desc nulls last
+  limit 1;
+
+  if new.is_completed is null then
+    raise exception 'New completion events require is_completed'
+      using errcode = '23502';
+  end if;
+
+  if not new.is_completed then
+    if not found or not coalesce(previous_event.is_completed, true) then
+      raise exception 'Only a current completion can be cancelled'
+        using errcode = '23514';
+    end if;
+
+    if new.details is distinct from previous_event.details then
+      raise exception 'Cancellation must preserve the completed result details'
+        using errcode = '23514';
+    end if;
+  end if;
+
+  if found then
+    new.program_version_id := previous_event.program_version_id;
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger enforce_routine_completion_event
+before insert on public.routine_completions
+for each row execute function public.enforce_routine_completion_event();
+
+create view public.workout_session_history
+with (security_invoker = true)
+as
+select
+  event.*,
+  row_number() over (
+    partition by event.user_id, event.workout_date, event.workout_type
+    order by coalesce(event.event_order, 0) desc
+  ) = 1 as is_current
+from public.workout_sessions as event;
+
+create view public.routine_completion_history
+with (security_invoker = true)
+as
+select
+  event.id,
+  event.user_id,
+  event.workout_date,
+  event.routine_id,
+  event.program_version_id,
+  event.details,
+  event.completed_at,
+  event.event_order,
+  coalesce(event.is_completed, true) as is_completed,
+  row_number() over (
+    partition by event.user_id, event.workout_date, event.routine_id
+    order by coalesce(event.event_order, 0) desc
+  ) = 1 as is_current
+from public.routine_completions as event;
+
+revoke all on public.workout_session_history from public, anon, authenticated;
+revoke all on public.routine_completion_history from public, anon, authenticated;
+grant select on public.workout_session_history to authenticated;
+grant select on public.routine_completion_history to authenticated;
+
+create or replace function public.enforce_record_program_version()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  expected_dow integer;
+  has_previous boolean;
+begin
+  if tg_op = 'INSERT' then
+    if tg_table_name = 'workout_sessions' then
+      select exists (
+        select 1
+        from public.workout_sessions as event
+        where event.user_id = new.user_id
+          and event.workout_date = new.workout_date
+          and event.workout_type = new.workout_type
+      ) into has_previous;
+    else
+      select exists (
+        select 1
+        from public.routine_completions as event
+        where event.user_id = new.user_id
+          and event.workout_date = new.workout_date
+          and event.routine_id = new.routine_id
+      ) into has_previous;
+    end if;
+
+    if not has_previous then
+      if new.program_version_id is null then
+        raise exception 'New workout records require a program version'
+          using errcode = '23502';
+      end if;
+
+      if not exists (
+        select 1
+        from public.workout_program_versions as program
+        where program.id = new.program_version_id
+          and program.id = (
+            select active_program.id
+            from public.workout_program_versions as active_program
+            where active_program.program_key = program.program_key
+              and active_program.effective_from <= new.workout_date
+            order by active_program.effective_from desc, active_program.version desc
+            limit 1
+          )
+      ) then
+        raise exception 'Program version is not active for workout date'
+          using errcode = '23514';
+      end if;
+    end if;
+  else
+    if new.program_version_id is distinct from old.program_version_id then
+      raise exception 'Workout record program version is immutable'
+        using errcode = '55000';
+    end if;
+
+    if new.workout_date is distinct from old.workout_date then
+      raise exception 'Workout record date is immutable'
+        using errcode = '55000';
+    end if;
+  end if;
+
+  if new.program_version_id in (
+    'luke-weekly-2026-09-02',
+    'luke-weekly-2026-09-02-canonical'
+  ) then
+    if tg_table_name = 'workout_sessions' then
+      expected_dow := case new.workout_type
+        when 'recovery_pushup' then 1
+        when 'pullup' then 3
+        when 'pushup' then 4
+        when 'sunday_pullup' then 0
+      end;
+      if expected_dow is null or extract(dow from new.workout_date)::integer <> expected_dow then
+        raise exception 'Workout type does not match the Gear Second weekday'
+          using errcode = '23514';
+      end if;
+
+      if new.workout_type = 'pullup' then
+        if new.total_reps <> new.target_total then
+          raise exception 'Gear Second pull-up records must complete the target total'
+            using errcode = '23514';
+        end if;
+        if jsonb_typeof(new.details -> 'treadmill_speed') is distinct from 'number' then
+          raise exception 'Gear Second pull-up records require treadmill_speed'
+            using errcode = '23514';
+        end if;
+        if (new.details ->> 'treadmill_speed')::numeric < 7 then
+          raise exception 'Gear Second pull-up treadmill_speed must be at least 7'
+            using errcode = '23514';
+        end if;
+      elsif new.workout_type = 'pushup' then
+        if new.set_count is null then
+          raise exception 'Gear Second push-up records require set_count'
+            using errcode = '23514';
+        end if;
+        if jsonb_typeof(new.details -> 'plank_succeeded') is distinct from 'boolean'
+          or jsonb_typeof(new.details -> 'plank_hold_seconds') is distinct from 'number'
+          or jsonb_typeof(new.details -> 'plank_rest_seconds') is distinct from 'number' then
+          raise exception 'Gear Second push-up records require plank result and timings'
+            using errcode = '23514';
+        end if;
+        if (new.details ->> 'plank_hold_seconds')::numeric < 1
+          or (new.details ->> 'plank_hold_seconds')::numeric <> trunc((new.details ->> 'plank_hold_seconds')::numeric)
+          or (new.details ->> 'plank_rest_seconds')::numeric < 1
+          or (new.details ->> 'plank_rest_seconds')::numeric <> trunc((new.details ->> 'plank_rest_seconds')::numeric) then
+          raise exception 'Gear Second plank timings must be positive whole seconds'
+            using errcode = '23514';
+        end if;
+      end if;
+    else
+      expected_dow := case new.routine_id
+        when 'mon' then 1
+        when 'tue' then 2
+        when 'fri' then 5
+        when 'sat' then 6
+        when 'sun' then 0
+      end;
+      if expected_dow is null or extract(dow from new.workout_date)::integer <> expected_dow then
+        raise exception 'Completion routine does not match the Gear Second weekday'
+          using errcode = '23514';
+      end if;
+
+      if new.routine_id = 'sat' then
+        if jsonb_typeof(new.details -> 'dips_max_reps') is distinct from 'number'
+          or jsonb_typeof(new.details -> 'treadmill_speed') is distinct from 'number' then
+          raise exception 'Gear Second Press completion requires dips and treadmill results'
+            using errcode = '23514';
+        end if;
+        if (new.details ->> 'dips_max_reps')::numeric < 0
+          or (new.details ->> 'dips_max_reps')::numeric <> trunc((new.details ->> 'dips_max_reps')::numeric)
+          or (new.details ->> 'treadmill_speed')::numeric < 10 then
+          raise exception 'Gear Second Press results are outside the allowed range'
+            using errcode = '23514';
+        end if;
+      end if;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+create function public.reject_record_event_mutation()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  if tg_op = 'UPDATE' or current_user in ('anon', 'authenticated') then
+    raise exception 'Workout record events are append-only'
+      using errcode = '55000';
+  end if;
+  return case when tg_op = 'DELETE' then old else new end;
+end;
+$$;
+
+create trigger block_workout_session_event_mutation
+before update or delete on public.workout_sessions
+for each row execute function public.reject_record_event_mutation();
+
+create trigger block_routine_completion_event_mutation
+before update or delete on public.routine_completions
+for each row execute function public.reject_record_event_mutation();
+
+drop function public.get_admin_routine_history(text);
+
+create function public.get_admin_routine_history(target_routine_id text)
+returns table (
+  event_id uuid,
+  user_id uuid,
+  user_email text,
+  workout_date date,
+  record_kind text,
+  routine_id text,
+  workout_type text,
+  program_version_id text,
+  target_total integer,
+  total_reps integer,
+  set_count integer,
+  set_reps integer[],
+  details jsonb,
+  recorded_at timestamptz,
+  event_order bigint,
+  is_completed boolean,
+  is_current boolean
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if coalesce((select auth.jwt() ->> 'email'), '') <> 'mainbbong@gmail.com' then
+    raise exception 'Administrator access required'
+      using errcode = '42501';
+  end if;
+
+  if target_routine_id not in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun') then
+    raise exception 'Invalid routine id'
+      using errcode = '22023';
+  end if;
+
+  return query
+    select history_record.*
+    from (
+      select
+        workout.id as event_id,
+        workout.user_id,
+        auth_user.email::text as user_email,
+        workout.workout_date,
+        'workout_session'::text as record_kind,
+        null::text as routine_id,
+        workout.workout_type,
+        workout.program_version_id,
+        workout.target_total,
+        workout.total_reps,
+        workout.set_count,
+        workout.set_reps,
+        workout.details,
+        workout.updated_at as recorded_at,
+        workout.event_order,
+        null::boolean as is_completed,
+        row_number() over (
+          partition by workout.user_id, workout.workout_date, workout.workout_type
+          order by coalesce(workout.event_order, 0) desc
+        ) = 1 as is_current
+      from public.workout_sessions as workout
+      join auth.users as auth_user on auth_user.id = workout.user_id
+      where extract(dow from workout.workout_date)::integer = case target_routine_id
+        when 'sun' then 0
+        when 'mon' then 1
+        when 'tue' then 2
+        when 'wed' then 3
+        when 'thu' then 4
+        when 'fri' then 5
+        when 'sat' then 6
+      end
+
+      union all
+
+      select
+        completion.id as event_id,
+        completion.user_id,
+        auth_user.email::text as user_email,
+        completion.workout_date,
+        'routine_completion'::text as record_kind,
+        completion.routine_id,
+        null::text as workout_type,
+        completion.program_version_id,
+        null::integer as target_total,
+        null::integer as total_reps,
+        null::integer as set_count,
+        null::integer[] as set_reps,
+        completion.details,
+        completion.completed_at as recorded_at,
+        completion.event_order,
+        coalesce(completion.is_completed, true) as is_completed,
+        row_number() over (
+          partition by completion.user_id, completion.workout_date, completion.routine_id
+          order by coalesce(completion.event_order, 0) desc
+        ) = 1 as is_current
+      from public.routine_completions as completion
+      join auth.users as auth_user on auth_user.id = completion.user_id
+      where completion.routine_id = target_routine_id
+    ) as history_record
+    order by history_record.workout_date desc, history_record.event_order desc nulls last;
+end;
+$$;
+
+revoke execute on function public.get_admin_routine_history(text) from public;
+revoke execute on function public.get_admin_routine_history(text) from anon;
+grant execute on function public.get_admin_routine_history(text) to authenticated;
+
+drop function public.get_admin_monthly_records(date);
+
+create function public.get_admin_monthly_records(target_month date)
+returns table (
+  user_id uuid,
+  user_email text,
+  workout_date date,
+  record_kind text,
+  routine_id text,
+  workout_type text,
+  program_version_id text,
+  target_total integer,
+  total_reps integer,
+  set_count integer,
+  set_reps integer[],
+  details jsonb,
+  recorded_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  month_start date;
+  month_end date;
+begin
+  if coalesce((select auth.jwt() ->> 'email'), '') <> 'mainbbong@gmail.com' then
+    raise exception 'Administrator access required'
+      using errcode = '42501';
+  end if;
+
+  if target_month is null then
+    raise exception 'Target month is required'
+      using errcode = '22004';
+  end if;
+
+  month_start := date_trunc('month', target_month)::date;
+  month_end := (month_start + interval '1 month')::date;
+
+  return query
+    select
+      auth_user.id,
+      auth_user.email::text,
+      monthly_record.workout_date,
+      monthly_record.record_kind,
+      monthly_record.routine_id,
+      monthly_record.workout_type,
+      monthly_record.program_version_id,
+      monthly_record.target_total,
+      monthly_record.total_reps,
+      monthly_record.set_count,
+      monthly_record.set_reps,
+      monthly_record.details,
+      monthly_record.recorded_at
+    from auth.users as auth_user
+    left join lateral (
+      select
+        workout.workout_date,
+        'workout_session'::text as record_kind,
+        null::text as routine_id,
+        workout.workout_type,
+        workout.program_version_id,
+        workout.target_total,
+        workout.total_reps,
+        workout.set_count,
+        workout.set_reps,
+        workout.details,
+        workout.updated_at as recorded_at
+      from public.workout_sessions as workout
+      where workout.user_id = auth_user.id
+        and workout.workout_date >= month_start
+        and workout.workout_date < month_end
+        and workout.id = (
+          select latest.id
+          from public.workout_sessions as latest
+          where latest.user_id = workout.user_id
+            and latest.workout_date = workout.workout_date
+            and latest.workout_type = workout.workout_type
+          order by coalesce(latest.event_order, 0) desc
+          limit 1
+        )
+
+      union all
+
+      select
+        completion.workout_date,
+        'routine_completion'::text as record_kind,
+        completion.routine_id,
+        null::text as workout_type,
+        completion.program_version_id,
+        null::integer as target_total,
+        null::integer as total_reps,
+        null::integer as set_count,
+        null::integer[] as set_reps,
+        completion.details,
+        completion.completed_at as recorded_at
+      from public.routine_completions as completion
+      where completion.user_id = auth_user.id
+        and completion.workout_date >= month_start
+        and completion.workout_date < month_end
+        and completion.is_completed is not false
+        and completion.id = (
+          select latest.id
+          from public.routine_completions as latest
+          where latest.user_id = completion.user_id
+            and latest.workout_date = completion.workout_date
+            and latest.routine_id = completion.routine_id
+          order by coalesce(latest.event_order, 0) desc
+          limit 1
+        )
+    ) as monthly_record on true
+    order by
+      auth_user.email nulls last,
+      auth_user.id,
+      monthly_record.workout_date nulls last,
+      monthly_record.record_kind nulls last,
+      monthly_record.routine_id nulls last,
+      monthly_record.workout_type nulls last,
+      monthly_record.recorded_at nulls last;
+end;
+$$;
+
+revoke execute on function public.get_admin_monthly_records(date) from public;
+revoke execute on function public.get_admin_monthly_records(date) from anon;
+grant execute on function public.get_admin_monthly_records(date) to authenticated;
+
+insert into public.workout_program_versions (
+  id,
+  program_key,
+  version,
+  definition,
+  effective_from,
+  source_url
+)
+values (
+  'luke-weekly-2026-09-02-canonical',
+  'luke-weekly',
+  3,
+  $program$
 {
   "schemaVersion": 1,
   "programKey": "luke-weekly",
@@ -430,3 +1038,87 @@
     }
   ]
 }
+$program$::jsonb,
+  date '2026-09-02',
+  'https://app.notion.com/p/3cebe971bff78144884ffe8cc7623006'
+);
+
+
+create or replace function public.get_admin_daily_records(target_date date)
+returns table (
+  user_id uuid,
+  user_email text,
+  record_kind text,
+  routine_id text,
+  workout_type text,
+  target_total integer,
+  total_reps integer,
+  set_count integer,
+  recorded_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if coalesce((select auth.jwt() ->> 'email'), '') <> 'mainbbong@gmail.com' then
+    raise exception 'Administrator access required'
+      using errcode = '42501';
+  end if;
+
+  return query
+    select daily_record.*
+    from (
+      select
+        workout.user_id,
+        auth_user.email::text as user_email,
+        'workout_session'::text as record_kind,
+        null::text as routine_id,
+        workout.workout_type,
+        workout.target_total,
+        workout.total_reps,
+        workout.set_count,
+        workout.updated_at as recorded_at
+      from public.workout_sessions as workout
+      join auth.users as auth_user on auth_user.id = workout.user_id
+      where workout.workout_date = target_date
+        and workout.id = (
+          select latest.id
+          from public.workout_sessions as latest
+          where latest.user_id = workout.user_id
+            and latest.workout_date = workout.workout_date
+            and latest.workout_type = workout.workout_type
+          order by coalesce(latest.event_order, 0) desc
+          limit 1
+        )
+
+      union all
+
+      select
+        completion.user_id,
+        auth_user.email::text as user_email,
+        'routine_completion'::text as record_kind,
+        completion.routine_id,
+        null::text as workout_type,
+        null::integer as target_total,
+        null::integer as total_reps,
+        null::integer as set_count,
+        completion.completed_at as recorded_at
+      from public.routine_completions as completion
+      join auth.users as auth_user on auth_user.id = completion.user_id
+      where completion.workout_date = target_date
+        and completion.is_completed is not false
+        and completion.id = (
+          select latest.id
+          from public.routine_completions as latest
+          where latest.user_id = completion.user_id
+            and latest.workout_date = completion.workout_date
+            and latest.routine_id = completion.routine_id
+          order by coalesce(latest.event_order, 0) desc
+          limit 1
+        )
+    ) as daily_record
+    order by daily_record.recorded_at desc;
+end;
+$$;

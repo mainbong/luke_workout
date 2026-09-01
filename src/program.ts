@@ -97,9 +97,9 @@ export function isGearSecondDate(date: string) {
 }
 
 export const GEAR_SECOND_WORKOUT_PROGRAM_VERSION: WorkoutProgramVersion = {
-  id: "luke-weekly-2026-09-02",
+  id: "luke-weekly-2026-09-02-canonical",
   program_key: "luke-weekly",
-  version: 2,
+  version: 3,
   effective_from: GEAR_SECOND_EFFECTIVE_DATE,
   source_url: "https://app.notion.com/p/3cebe971bff78144884ffe8cc7623006",
   definition: gearSecondDefinition as ProgramDefinition,

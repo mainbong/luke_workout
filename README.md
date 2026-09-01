@@ -23,6 +23,7 @@ npm run dev
 npm run check:admin-calendar
 npm run check:program
 npm run check:progression
+npm run check:record-events
 npm run typecheck
 npm run build
 npm run preview
@@ -50,7 +51,7 @@ GitHub Actions가 `main` 브랜치 변경을 감지해 Vite 빌드 결과를 Git
 ## Gear Second v2 입력 데이터
 
 2026년 9월 2일부터 아래 값을 날짜별로 누적 저장합니다. 운동 날짜는 선택한 날짜를
-기본값으로 사용하며 같은 날짜·항목을 다시 저장할 때만 해당 행을 수정합니다.
+기본값으로 사용하며 같은 날짜·항목을 다시 저장해도 이전 값과 새 값을 모두 event로 보존합니다.
 
 | 요일 | 입력값 |
 | --- | --- |
@@ -94,8 +95,8 @@ Gear Second v2의 전체 처방·휴식·가이드 링크는
 - `workout_sessions`에는 로그인 사용자 ID, 운동 날짜, 종목, 당시 목표, 전체·세트별 횟수와 세트 수를 저장합니다.
 - 운동별 확장값은 `details` JSONB에 저장합니다. 현재 키는 `treadmill_speed`, `plank_succeeded`, `plank_hold_seconds`, `plank_rest_seconds`, `dips_max_reps`입니다.
 - `routine_completions`에는 날짜별 완료 여부와 완료형 루틴의 `details`를 저장합니다.
-- 같은 날짜·종목을 다시 저장하면 해당 행만 수정되고, 다음 주 날짜의 기록은 새 행으로 추가되어 덮어쓰지 않고 누적됩니다.
-- Row Level Security(RLS)로 로그인한 사용자가 자신의 기록만 조회·작성·수정·삭제할 수 있습니다.
+- 같은 날짜·종목의 수정과 완료 취소도 새 event로 추가합니다. 현재 상태와 progression은 DB가 표시한 최신 event만 사용합니다.
+- Row Level Security(RLS)로 로그인한 사용자가 자신의 기록만 조회하고 event를 추가할 수 있습니다. 직접 수정·삭제는 허용하지 않습니다.
 - 전체 사용자 기록은 이메일 허용 목록을 서버 측에서 다시 검사하는 관리자 전용 DB 함수로만 조회하며, 현재는 `mainbbong@gmail.com` 한 계정만 허용합니다.
 - 관리자 기능은 조회 전용으로 다른 사용자의 기록을 수정하거나 삭제하는 권한을 부여하지 않습니다.
 - 이메일 주소는 Supabase Auth가 로그인 용도로 관리하며 앱의 운동 기록 테이블에는 저장하지 않습니다.
@@ -109,6 +110,7 @@ Gear Second v2의 전체 처방·휴식·가이드 링크는
 RLS, 푸쉬업 세트 수 제약, Gear Second v2 시드와 관리자 조회 필드를 함께 적용합니다.
 `20260901000600_harden_record_identity.sql`은 누적 기록의 사용자·종목·요일 식별자를 변경할 수 없게 고정합니다.
 `20260901000700_require_complete_five_set_records.sql`은 버전 경계와 5세트 입력의 기존 데이터 사전 검사를 통과한 뒤 `set_reps`를 필수로 강제합니다.
+`20260901000800_preserve_record_event_history.sql`은 기존 행을 바꾸거나 백필하지 않고 결과·완료 테이블을 append-only event 이력으로 전환하며, 최신 상태 view와 canonical Gear Second 정의를 새 immutable 버전으로 추가합니다.
 
 ```bash
 supabase migration list --linked
