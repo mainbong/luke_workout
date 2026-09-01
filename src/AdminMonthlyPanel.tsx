@@ -71,7 +71,7 @@ function recordLabel(record: AdminMonthlyRecord) {
 }
 
 function outcomeNote(record: AdminMonthlyRecord & { workout_date: string }, outcome: ReturnType<typeof recordOutcome>) {
-  if (!record.program_version_id) {
+  if (!record.program_version_id && !outcome.programVersion) {
     return "기록 당시 프로그램 버전이 없어 PR을 판정하지 않고 수행 완료로 표시합니다.";
   }
   if (!outcome.programVersion) {
