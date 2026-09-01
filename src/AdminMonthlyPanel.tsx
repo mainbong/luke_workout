@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, RefreshCw, ShieldCheck, Users } from "lucide-react";
 import {
   buildMonthCells,
+  recordOutcome,
   recordState,
   routineIdForDate,
   seoulMonthValue,
@@ -9,7 +10,6 @@ import {
 } from "./adminCalendar";
 import {
   findProgramVersionForDate,
-  findProgramVersionForRecord,
   type WorkoutProgramVersion,
 } from "./program";
 import { supabase } from "./supabase";
@@ -68,6 +68,33 @@ function recordLabel(record: AdminMonthlyRecord) {
   if (record.workout_type === "sunday_pullup") return "일요일 맨몸 풀업 결과";
   if (record.workout_type === "pullup") return "풀업 결과";
   return "푸쉬업 결과";
+}
+
+function outcomeNote(record: AdminMonthlyRecord & { workout_date: string }, outcome: ReturnType<typeof recordOutcome>) {
+  if (!record.program_version_id) {
+    return "기록 당시 프로그램 버전이 없어 PR을 판정하지 않고 수행 완료로 표시합니다.";
+  }
+  if (!outcome.programVersion) {
+    return "저장된 프로그램 버전을 확인할 수 없어 PR을 판정하지 않고 수행 완료로 표시합니다.";
+  }
+  if (record.record_kind === "routine_completion") {
+    return "완료 체크는 PR 판정 없이 수행 완료로 표시합니다.";
+  }
+  if (!record.workout_type || record.target_total === null) {
+    return "PR 판정에 필요한 결과가 없어 수행 완료로 표시합니다.";
+  }
+
+  const rule = outcome.programVersion.definition.progressions[record.workout_type];
+  const condition = record.workout_type === "recovery_pushup"
+    ? `5세트 모두 ${record.target_total}회 이상`
+    : record.workout_type === "sunday_pullup"
+      ? `맨몸 5세트 모두 ${record.target_total}회 이상`
+      : record.workout_type === "pullup"
+        ? `총 ${record.target_total}회 완료 및 ${rule.successSetCount}세트 이내`
+        : `5세트 합계 ${record.target_total}회 이상`;
+  return `프로그램 v${outcome.programVersion.version} 기준은 ${condition}입니다. ${outcome.state === "pr"
+    ? `조건을 충족해 다음 목표가 ${rule.increment}회 증가합니다.`
+    : "조건을 충족하지 않아 다음 목표를 유지합니다."}`;
 }
 
 export function AdminMonthlyPanel({ programVersions }: { programVersions: WorkoutProgramVersion[] }) {
@@ -134,6 +161,7 @@ export function AdminMonthlyPanel({ programVersions }: { programVersions: Workou
     return grouped;
   }, [userRecords]);
   const selectedRecords = recordsByDate.get(selectedDate) ?? [];
+  const selectedState = recordState(selectedRecords, programVersions);
   const routineForDate = (date: string) => findProgramVersionForDate(programVersions, date)
     ?.definition.days.find((routine) => routine.id === routineIdForDate(date));
   const selectedRoutine = routineForDate(selectedDate);
@@ -211,14 +239,10 @@ export function AdminMonthlyPanel({ programVersions }: { programVersions: Workou
               {buildMonthCells(month).map((cell, index) => {
                 if (!cell) return <span className="admin-calendar-blank" key={`blank-${index}`} aria-hidden="true" />;
                 const dayRecords = recordsByDate.get(cell.date) ?? [];
-                const state = recordState(dayRecords);
+                const state = recordState(dayRecords, programVersions);
                 const routine = routineForDate(cell.date);
-                const stateLabel = state === "both"
-                  ? "결과와 완료 기록 있음"
-                  : state === "result"
-                    ? "결과 기록 있음"
-                    : state === "completion" ? "완료 기록 있음" : "저장 기록 없음";
-                const marker = state === "both" ? "R✓" : state === "result" ? "R" : "✓";
+                const stateLabel = state === "pr" ? "PR 달성" : state === "performed" ? "수행 완료" : "저장 기록 없음";
+                const marker = state === "pr" ? "👑" : "✓";
                 return (
                   <button
                     type="button"
@@ -235,9 +259,8 @@ export function AdminMonthlyPanel({ programVersions }: { programVersions: Workou
               })}
             </div>
             <div className="admin-calendar-legend" aria-label="달력 기록 상태 범례">
-              <span><i className="result" aria-hidden="true">R</i> 결과 입력</span>
-              <span><i className="completion" aria-hidden="true">✓</i> 완료 체크</span>
-              <span><i className="both" aria-hidden="true">R✓</i> 결과 + 완료</span>
+              <span><i className="performed" aria-hidden="true">✓</i> 수행 완료</span>
+              <span><i className="pr" aria-hidden="true">👑</i> PR 달성</span>
             </div>
           </div>
 
@@ -248,6 +271,11 @@ export function AdminMonthlyPanel({ programVersions }: { programVersions: Workou
               <span>예정 루틴 · {selectedRoutine?.ko}</span>
               <strong>{selectedRoutine?.title ?? "등록된 루틴 없음"}</strong>
             </div>
+            {selectedState !== "none" && (
+              <p className={`admin-calendar-detail-status ${selectedState}`}>
+                {selectedState === "pr" ? "👑 PR 달성" : "수행 완료"}
+              </p>
+            )}
             {selectedRecords.length === 0 ? (
               <div className="admin-empty">
                 <strong>저장된 결과나 완료 체크가 없습니다.</strong>
@@ -256,15 +284,16 @@ export function AdminMonthlyPanel({ programVersions }: { programVersions: Workou
             ) : (
               <div className="admin-calendar-records">
                 {selectedRecords.map((record) => {
-                  const recordProgramVersion = findProgramVersionForRecord(programVersions, record);
-                  const programLabel = recordProgramVersion
-                    ? `프로그램 v${recordProgramVersion.version}`
+                  const outcome = recordOutcome(record, programVersions);
+                  const programLabel = outcome.programVersion
+                    ? `프로그램 v${outcome.programVersion.version}`
                     : record.program_version_id ? "프로그램 버전 확인 필요" : "프로그램 버전 없음";
                   return (
-                    <article key={`${record.record_kind}-${record.recorded_at}`}>
-                      <span>{recordLabel(record)}</span>
+                    <article className={outcome.state} key={`${record.record_kind}-${record.recorded_at}`}>
+                      <span>{outcome.state === "pr" ? "👑 PR 달성" : "수행 완료"} · {recordLabel(record)}</span>
                       <strong>{recordSummary(record)}</strong>
                       <small>{record.recorded_at ? `${formatRecordedAt(record.recorded_at)} 저장 · ${programLabel}` : programLabel}</small>
+                      <small>{outcomeNote(record, outcome)}</small>
                     </article>
                   );
                 })}

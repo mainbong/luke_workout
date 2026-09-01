@@ -641,8 +641,8 @@ main { max-width: 1500px; margin: auto; }
   font-weight: 950;
   line-height: 1;
 }
-.admin-calendar-day.completion > i { background: #849331; }
-.admin-calendar-day.both > i { background: linear-gradient(135deg, var(--coral) 50%, #849331 50%); }
+.admin-calendar-day.performed > i { background: #849331; }
+.admin-calendar-day.pr > i { font-size: 9px; }
 .admin-calendar-legend { display: flex; flex-wrap: wrap; gap: 7px 14px; margin-top: 10px; }
 .admin-calendar-legend span { display: inline-flex; align-items: center; gap: 5px; color: rgba(255,255,255,.65); font-size: 9px; }
 .admin-calendar-legend i {
@@ -659,18 +659,21 @@ main { max-width: 1500px; margin: auto; }
   font-weight: 950;
   line-height: 1;
 }
-.admin-calendar-legend i.completion { background: #849331; }
-.admin-calendar-legend i.both { background: linear-gradient(135deg, var(--coral) 50%, #849331 50%); }
+.admin-calendar-legend i.performed { background: #849331; }
+.admin-calendar-legend i.pr { font-size: 9px; }
 .admin-calendar-detail { min-width: 0; padding: 20px; color: var(--ink); background: var(--paper); }
 .admin-calendar-detail .eyebrow { margin-bottom: 3px; }
 .admin-calendar-detail h3 { margin: 0; font-size: 24px; letter-spacing: -.04em; }
 .admin-calendar-routine { display: grid; gap: 3px; margin-top: 14px; padding: 13px; background: var(--cream); border-left: 4px solid var(--coral); }
 .admin-calendar-routine span { color: #4f5c57; font-size: 9px; font-weight: 900; letter-spacing: .08em; }
 .admin-calendar-routine strong { font-size: 15px; }
+.admin-calendar-detail-status { display: inline-flex; margin: 12px 0 0; padding: 4px 8px; color: var(--deep); background: #849331; font-size: 10px; font-weight: 950; }
+.admin-calendar-detail-status.pr { background: var(--coral); }
 .admin-calendar-detail .admin-empty { color: #4f5c57; border-color: var(--line); }
 .admin-calendar-detail .admin-empty strong { color: var(--ink); }
 .admin-calendar-records { display: grid; gap: 7px; margin-top: 12px; }
 .admin-calendar-records article { display: grid; gap: 3px; padding: 12px; background: #edf0df; border-left: 3px solid var(--navy); }
+.admin-calendar-records article.pr { border-left-color: var(--coral); }
 .admin-calendar-records article > span { color: #4f5c57; font-size: 9px; font-weight: 900; }
 .admin-calendar-records article > strong { font-size: 12px; }
 .admin-calendar-records article > small { color: #4f5c57; font-size: 9px; }
