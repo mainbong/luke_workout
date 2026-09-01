@@ -36,6 +36,7 @@ assert.deepEqual(
 const programVersion = {
   id: "v1",
   version: 1,
+  effective_from: "2026-07-23",
   definition: {
     progressions: {
       recovery_pushup: { increment: 1 },
@@ -49,6 +50,7 @@ const versions = [{
   ...programVersion,
   id: "v2",
   version: 2,
+  effective_from: "2026-08-01",
   definition: {
     ...programVersion.definition,
     progressions: {
@@ -81,10 +83,23 @@ assert.equal(recordOutcome(record("pullup", { total_reps: 9, set_count: 10 }), v
 assert.equal(recordOutcome(record("pullup", { total_reps: 10, set_count: 11 }), versions).state, "performed");
 assert.equal(recordOutcome(record("sunday_pullup", { set_reps: [10, 10, 10, 10, 10] }), versions).state, "pr");
 assert.equal(recordOutcome(record("sunday_pullup", { set_reps: [10, 10, 10, 10, 9] }), versions).state, "performed");
-const legacy = recordOutcome(record("pushup", { program_version_id: null, total_reps: 10 }), versions);
-assert.equal(legacy.state, "performed");
-assert.equal(legacy.programVersion, null);
-const unknown = recordOutcome(record("pushup", { program_version_id: "unknown", total_reps: 10 }), versions);
+const legacy = recordOutcome(record("recovery_pushup", {
+  program_version_id: null,
+  target_total: 16,
+  set_reps: [16, 16, 16, 16, 16],
+}), versions);
+assert.equal(legacy.state, "pr");
+assert.equal(legacy.programVersion?.id, "v2");
+assert.equal(recordOutcome(record("recovery_pushup", {
+  program_version_id: null,
+  target_total: 16,
+  set_reps: [16, 16, 15, 16, 16],
+}), versions).state, "performed");
+const unknown = recordOutcome(record("recovery_pushup", {
+  program_version_id: "unknown",
+  target_total: 16,
+  set_reps: [16, 16, 16, 16, 16],
+}), versions);
 assert.equal(unknown.state, "performed");
 assert.equal(unknown.programVersion, null);
 assert.equal(recordOutcome({ ...record(null), record_kind: "routine_completion" }, versions).state, "performed");

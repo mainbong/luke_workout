@@ -65,9 +65,7 @@ export function recordOutcome(
   record: AchievementRecord,
   programVersions: readonly WorkoutProgramVersion[],
 ): RecordOutcome {
-  const programVersion = record.program_version_id
-    ? findProgramVersionForRecord(programVersions, record)
-    : null;
+  const programVersion = findProgramVersionForRecord(programVersions, record);
   if (record.record_kind === "routine_completion"
     || !programVersion
     || !record.workout_type
