@@ -97,7 +97,7 @@ const migration = readFileSync(
   new URL("../supabase/migrations/20260901000800_preserve_record_event_history.sql", import.meta.url),
   "utf8",
 );
-const lineageMigration = read("../supabase/migrations/20260902000000_map_admin_routine_history_by_lineage.sql");
+const lineageMigration = read("../supabase/migrations/20260902000100_exclude_wednesday_completions_from_pullup_lineage.sql");
 const workoutMappingSql = lineageMigration.match(
   /where workout\.workout_type = case target_routine_id([\s\S]*?)\n\s*end/,
 )?.[1];
@@ -107,7 +107,19 @@ assert.deepEqual(
     .map(([, routineId, workoutType]) => [routineId, workoutType])),
   { mon: "recovery_pushup", wed: "pullup", thu: "pushup", sun: "sunday_pullup" },
 );
-assert.match(lineageMigration, /where completion\.routine_id = target_routine_id/);
+assert.match(
+  lineageMigration,
+  /from public\.get_admin_daily_records\(current_date\)\s+limit 1;/,
+  "admin history must retain its server-side authorization check",
+);
+const completionFilterSql = lineageMigration.match(
+  /where completion\.routine_id = target_routine_id([\s\S]*?)\n\s*\) as history_record/,
+)?.[1]?.trim();
+assert.equal(
+  completionFilterSql,
+  "and target_routine_id <> 'wed'",
+  "Wed completions must be excluded while other routine completions remain included",
+);
 assert.doesNotMatch(lineageMigration, /extract\s*\(\s*dow\s+from workout\.workout_date\s*\)/i);
 assert.doesNotMatch(
   lineageMigration,
