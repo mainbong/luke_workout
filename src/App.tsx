@@ -1653,7 +1653,18 @@ function App() {
             <button type="button" onClick={() => setAuthNotice("")} aria-label="로그인 알림 닫기">×</button>
           </div>
         )}
-        {isAdmin && <AdminMonthlyPanel programVersions={programVersions} />}
+        {isAdmin ? (
+          <AdminMonthlyPanel programVersions={programVersions} />
+        ) : session ? (
+          <AdminMonthlyPanel
+            mode="self"
+            programVersions={programVersions}
+            workoutRecords={[...pushRecords, ...pullRecords, ...recoveryPushRecords, ...sundayPullupRecords]}
+            completionRecords={completionRecords}
+            recordsStatus={recordsStatus}
+            onRefresh={loadRecords}
+          />
+        ) : null}
         <section className="week-section" aria-labelledby="week-title">
           <div className="week-heading">
             <div>

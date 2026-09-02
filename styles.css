@@ -663,6 +663,7 @@ main { max-width: 1500px; margin: auto; }
   background: rgba(255,255,255,.08);
   border: 1px solid rgba(255,255,255,.2);
 }
+.admin-calendar-controls.self { grid-template-columns: auto; justify-content: end; }
 .admin-calendar-controls label { display: grid; gap: 6px; }
 .admin-calendar-controls label > span {
   display: inline-flex;
@@ -896,6 +897,7 @@ footer {
   .admin-calendar-panel .admin-heading { gap: 12px; }
   .admin-calendar-controls,
   .admin-calendar-layout { grid-template-columns: 1fr; }
+  .admin-calendar-controls.self { grid-template-columns: 1fr; justify-content: stretch; }
   .admin-month-control { grid-template-columns: 44px minmax(0, 1fr) 44px; }
   .admin-calendar-heading { align-items: flex-start; flex-direction: column; gap: 2px; }
   .admin-calendar-weekdays,
